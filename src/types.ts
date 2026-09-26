@@ -1,7 +1,7 @@
 export type ReadingStatus = '未読' | '読書中' | '読了'
-export type LinkType = 'PDF' | 'NotebookLM' | 'その他'
 
-export interface BookLink { id: string; type: LinkType; label: string; url: string }
+/** 関連リンク。label は表示名（インフォグラフィック、音声解説など） */
+export interface BookLink { id: string; label: string; url: string }
 export interface Category { id: string; name: string; parent?: string }
 export interface Book {
   id: string

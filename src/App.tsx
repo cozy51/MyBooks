@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { BookOpen, ChevronRight, Cloud, Download, ExternalLink, FileText, Grid2X2, List, NotebookPen, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { BookOpen, ChevronRight, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FileText, Grid2X2, List, LoaderCircle, LogOut, RefreshCw, NotebookPen, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
 import { coverSources } from './cover'
 import { categories, sampleBooks } from './data'
+import { DRIVE_FILE_NAME } from './drive'
+import { useDriveSync, type SyncStatus } from './useDriveSync'
 import type { Book, BookLink, LinkType, ReadingStatus } from './types'
 
 const STORE = 'mybooks-library-v1'
@@ -23,7 +25,9 @@ function App() {
   const [backupOpen, setBackupOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const saveBooks = (next: Book[]) => { setBooks(next); localStorage.setItem(STORE, JSON.stringify(next)) }
+  const storeBooks = useCallback((next: Book[]) => { setBooks(next); localStorage.setItem(STORE, JSON.stringify(next)) }, [])
+  const drive = useDriveSync(STORE, books, storeBooks)
+  const saveBooks = (next: Book[]) => { storeBooks(next); drive.markDirty() }
   const filtered = useMemo(() => books.filter(book => {
     const cat = categories.find(c => c.id === book.categoryId)
     const parent = categories.find(c => c.id === cat?.parent)
@@ -58,7 +62,7 @@ function App() {
   return <div className="app-shell">
     <header className="topbar">
       <button className="brand" onClick={() => { setQuery(''); setCategory('all'); setStatus('all') }}><img className="brandmark" src="/favicon.svg" alt="" /><span>MyBooks<small>わたしの本棚</small></span></button>
-      <div className="header-actions"><button className="ghost-btn backup-label" onClick={() => setBackupOpen(true)}><Cloud /> 保存・バックアップ</button><button className="primary-btn" onClick={() => setEditing(emptyBook())}><Plus /> 本を追加</button><button className="avatar" aria-label="設定"><Settings /></button></div>
+      <div className="header-actions"><button className={`ghost-btn backup-label sync-${drive.status}`} onClick={() => setBackupOpen(true)} title={syncLabel[drive.status]}><SyncIcon status={drive.status} /><span>{syncLabel[drive.status]}</span></button><button className="primary-btn" onClick={() => setEditing(emptyBook())}><Plus /> 本を追加</button><button className="avatar" aria-label="設定"><Settings /></button></div>
     </header>
 
     <main>
@@ -79,7 +83,7 @@ function App() {
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
     {editing && <BookModal book={editing} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={book => { const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
-    {backupOpen && <BackupModal onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
+    {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>
 }
@@ -133,7 +137,31 @@ function BookModal({ book, onClose, onSave, onDelete, onZoom }: { book: Book; on
   </form></section></div>
 }
 
-function BackupModal({ onClose, onExport, onImport }: { onClose: () => void; onExport: () => void; onImport: () => void }) { return <div className="modal-backdrop"><section className="modal small"><div className="modal-head"><div><p className="eyebrow">DATA MANAGEMENT</p><h2>保存・バックアップ</h2></div><button className="icon-btn" onClick={onClose}><X /></button></div><div className="backup-info"><Cloud /><div><strong>データはこのブラウザに自動保存されています</strong><p>定期的にJSONをダウンロードし、Google Driveの所定フォルダへ保存してください。</p></div></div><div className="backup-cards"><button onClick={onExport}><Download /><span><strong>バックアップを書き出す</strong><small>全データをJSON形式で保存</small></span></button><button onClick={onImport}><Upload /><span><strong>データを読み込む</strong><small>JSONバックアップまたはCSV</small></span></button></div><p className="hint">読み込み時、JSONは現在のデータを置き換え、CSVは現在の本棚に追加されます。</p></section></div> }
+const syncLabel: Record<SyncStatus, string> = { unavailable: '保存・バックアップ', signedOut: 'Driveに接続', syncing: '同期中…', synced: 'Drive保存済み', pending: '保存待ち', error: '同期エラー' }
+function SyncIcon({ status }: { status: SyncStatus }) {
+  if (status === 'syncing') return <LoaderCircle className="spin" />
+  if (status === 'synced') return <CloudCheck />
+  if (status === 'pending') return <CloudUpload />
+  if (status === 'error') return <CloudAlert />
+  if (status === 'signedOut') return <CloudOff />
+  return <Cloud />
+}
+
+function DriveSection({ drive }: { drive: ReturnType<typeof useDriveSync> }) {
+  if (drive.status === 'unavailable') return <div className="backup-info"><CloudOff /><div><strong>Google Drive保存は未設定です</strong><p>環境変数 <code>VITE_GOOGLE_CLIENT_ID</code> を設定すると、Google Driveに自動保存できます（READMEを参照）。現在はこのブラウザ内にのみ保存されています。</p></div></div>
+  const connected = drive.status !== 'signedOut'
+  return <div className={`backup-info drive-info sync-${drive.status}`}><SyncIcon status={drive.status} /><div>
+    <strong>{connected ? `Google Driveに自動保存しています（${syncLabel[drive.status]}）` : 'Google Driveに接続していません'}</strong>
+    <p>{connected ? <>マイドライブの <code>{DRIVE_FILE_NAME}</code> に保存し、別の端末とも同じデータを使えます。</> : '接続すると、本棚のデータをGoogle Driveに自動保存し、別の端末でも同じデータを使えます。'}
+      {drive.lastSync && <><br />最終同期：{new Date(drive.lastSync).toLocaleString('ja-JP')}</>}</p>
+    {drive.message && <p className="drive-error">{drive.message}</p>}
+    <div className="drive-actions">{connected
+      ? <><button className="secondary-btn" disabled={drive.status === 'syncing'} onClick={() => void drive.syncNow()}><RefreshCw /> 今すぐ同期</button><button className="ghost-btn" onClick={drive.disconnect}><LogOut /> 接続を解除</button></>
+      : <button className="primary-btn" onClick={() => void drive.connect()}><Cloud /> Googleでログインして接続</button>}</div>
+  </div></div>
+}
+
+function BackupModal({ drive, onClose, onExport, onImport }: { drive: ReturnType<typeof useDriveSync>; onClose: () => void; onExport: () => void; onImport: () => void }) { return <div className="modal-backdrop"><section className="modal small"><div className="modal-head"><div><p className="eyebrow">DATA MANAGEMENT</p><h2>保存・バックアップ</h2></div><button className="icon-btn" onClick={onClose}><X /></button></div><DriveSection drive={drive} /><div className="backup-cards"><button onClick={onExport}><Download /><span><strong>バックアップを書き出す</strong><small>全データをJSON形式で保存</small></span></button><button onClick={onImport}><Upload /><span><strong>データを読み込む</strong><small>JSONバックアップまたはCSV</small></span></button></div><p className="hint">読み込み時、JSONは現在のデータを置き換え、CSVは現在の本棚に追加されます。Google Driveに接続中は、読み込んだ内容もDriveに保存されます。</p></section></div> }
 
 function splitCsv(line: string) { const values: string[] = []; let value = '', quoted = false; for (let i = 0; i < line.length; i++) { const char = line[i]; if (char === '"' && line[i + 1] === '"') { value += '"'; i++ } else if (char === '"') quoted = !quoted; else if (char === ',' && !quoted) { values.push(value); value = '' } else value += char } values.push(value); return values }
 function parseCsvLinks(value: string): BookLink[] { return value.split('|').map(v => v.trim()).filter(Boolean).map((entry, i) => { const [type = 'その他', label = '', url = ''] = entry.split('::'); return { id: `${crypto.randomUUID()}-${i}`, type: (['PDF', 'NotebookLM', 'その他'].includes(type) ? type : 'その他') as LinkType, label, url } }) }

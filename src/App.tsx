@@ -16,7 +16,13 @@ function lastCategory() {
   try { const id = localStorage.getItem(LAST_CATEGORY); if (id && categories.some(c => c.id === id && c.parent)) return id } catch { /* noop */ }
   return 'd1'
 }
-const emptyBook = (): Book => ({ id: crypto.randomUUID(), title: '', author: '', categoryId: lastCategory(), cover: '', baseMonth: new Date().toISOString().slice(0, 7), status: '未読', memo: '', links: [], updatedAt: new Date().toISOString() })
+const LAST_BASE_MONTH = 'mybooks-last-base-month'
+/** 前回保存した本の基準月（新しい本の初期値に使う。未保存なら今月） */
+function lastBaseMonth() {
+  try { const month = localStorage.getItem(LAST_BASE_MONTH); if (month && /^\d{4}-\d{2}$/.test(month)) return month } catch { /* noop */ }
+  return new Date().toISOString().slice(0, 7)
+}
+const emptyBook = (): Book => ({ id: crypto.randomUUID(), title: '', author: '', categoryId: lastCategory(), cover: '', baseMonth: lastBaseMonth(), status: '未読', memo: '', links: [], updatedAt: new Date().toISOString() })
 
 // 表紙はDriveのファイルIDで保持する（以前の共有リンク形式もIDにそろえる）
 const withCoverIds = (books: Book[]) => books.map(b => ({ ...b, cover: normalizeCover(b.cover || '') }))
@@ -93,7 +99,7 @@ function App() {
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
-    {editing && <BookModal book={editing} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={book => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId) } catch { /* noop */ } const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
+    {editing && <BookModal book={editing} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={book => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); if (book.baseMonth) localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>

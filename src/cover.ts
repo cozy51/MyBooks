@@ -1,3 +1,7 @@
+/** 表紙画像を置くGoogle Driveフォルダ */
+export const COVER_FOLDER_ID = import.meta.env.VITE_DRIVE_COVER_FOLDER_ID?.trim() || '1nQ70ASmx51gP530IRPGp1ZZQnkxwp9vt'
+export const COVER_FOLDER_URL = `https://drive.google.com/drive/folders/${COVER_FOLDER_ID}`
+
 // Google Driveの共有リンク（/file/d/ID/view など）は<img>でそのまま表示できないため、
 // ファイルIDを取り出してサムネイル用URLへ変換する。Drive以外のURLはそのまま使う。
 const DRIVE_HOSTS = /(^|\.)(drive|docs)\.google\.com$|(^|\.)googleusercontent\.com$/
@@ -25,4 +29,15 @@ export function coverSources(value: string, width = 800): string[] {
     `https://drive.google.com/thumbnail?id=${id}&sz=w${width}`,
     `https://lh3.googleusercontent.com/d/${id}=w${width}`,
   ]
+}
+
+/** 保存用の値。Driveの画像はファイルIDだけを保存し、それ以外のURLはそのまま */
+export function normalizeCover(value: string): string {
+  return driveFileId(value) ?? value.trim()
+}
+
+/** ファイルIDのとき、Driveでそのファイルを開くURL */
+export function driveFileUrl(value: string): string | null {
+  const id = driveFileId(value)
+  return id ? `https://drive.google.com/file/d/${id}/view` : null
 }

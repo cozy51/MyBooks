@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
-import { BookOpen, ChevronRight, Cloud, Download, ExternalLink, FileText, Grid2X2, Library, List, NotebookPen, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { BookOpen, ChevronRight, Cloud, Download, ExternalLink, FileText, Grid2X2, List, NotebookPen, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
 import { coverSources } from './cover'
 import { categories, sampleBooks } from './data'
 import type { Book, BookLink, LinkType, ReadingStatus } from './types'
@@ -19,6 +19,7 @@ function App() {
   const [status, setStatus] = useState('all')
   const [view, setView] = useState<'cards' | 'table'>('cards')
   const [editing, setEditing] = useState<Book | null>(null)
+  const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null)
   const [backupOpen, setBackupOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -56,7 +57,7 @@ function App() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <button className="brand" onClick={() => { setQuery(''); setCategory('all'); setStatus('all') }}><span className="brandmark"><Library /></span><span>MyBooks<small>わたしの本棚</small></span></button>
+      <button className="brand" onClick={() => { setQuery(''); setCategory('all'); setStatus('all') }}><img className="brandmark" src="/favicon.svg" alt="" /><span>MyBooks<small>わたしの本棚</small></span></button>
       <div className="header-actions"><button className="ghost-btn backup-label" onClick={() => setBackupOpen(true)}><Cloud /> 保存・バックアップ</button><button className="primary-btn" onClick={() => setEditing(emptyBook())}><Plus /> 本を追加</button><button className="avatar" aria-label="設定"><Settings /></button></div>
     </header>
 
@@ -72,27 +73,44 @@ function App() {
       <div className="content-heading"><div><h2>すべての本</h2><span>{filtered.length}冊を表示</span></div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button></div></div>
 
       {filtered.length === 0 ? <Empty onAdd={() => setEditing(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
-        <div className="book-grid">{filtered.map(book => <BookCard key={book.id} book={book} onClick={() => setEditing(book)} />)}</div> :
+        <div className="book-grid">{filtered.map(book => <BookCard key={book.id} book={book} onClick={() => setEditing(book)} onZoom={setZoomed} />)}</div> :
         <BookTable books={filtered} onSelect={setEditing} />}
     </main>
-    <footer><span><Library /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
-    {editing && <BookModal book={editing} onClose={() => setEditing(null)} onSave={book => { const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
+    <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
+    {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
+    {editing && <BookModal book={editing} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={book => { const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>
 }
 
-function CoverImage({ src, alt, fallback }: { src: string; alt: string; fallback: ReactNode }) {
-  const sources = useMemo(() => coverSources(src), [src])
+type Zoom = { src: string; alt: string }
+
+function CoverImage({ src, alt, fallback, width, onZoom }: { src: string; alt: string; fallback: ReactNode; width?: number; onZoom?: (z: Zoom) => void }) {
+  const sources = useMemo(() => coverSources(src, width), [src, width])
   const [failed, setFailed] = useState({ src, count: 0 })
   const count = failed.src === src ? failed.count : 0
   if (count >= sources.length) return <>{fallback}</>
-  return <img src={sources[count]} alt={alt} referrerPolicy="no-referrer" loading="lazy" onError={() => setFailed({ src, count: count + 1 })} />
+  const zoom = onZoom && ((e: React.SyntheticEvent) => { e.stopPropagation(); onZoom({ src, alt }) })
+  return <img src={sources[count]} alt={alt} referrerPolicy="no-referrer" loading="lazy" onError={() => setFailed({ src, count: count + 1 })}
+    className={zoom ? 'zoomable' : undefined} title={zoom ? 'クリックで拡大' : undefined} onClick={zoom} />
+}
+
+function CoverLightbox({ src, alt, onClose }: Zoom & { onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+  return <div className="lightbox" role="dialog" aria-modal="true" aria-label={alt} onClick={onClose}>
+    <button className="lightbox-close" aria-label="閉じる" onClick={onClose}><X /></button>
+    <CoverImage src={src} alt={alt} width={1600} fallback={<p className="lightbox-error">画像を表示できません</p>} />
+  </div>
 }
 
 function categoryPath(id: string) { const child = categories.find(c => c.id === id); const parent = categories.find(c => c.id === child?.parent); return { child, parent } }
-function BookCard({ book, onClick }: { book: Book; onClick: () => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
-  <div className="cover-wrap"><CoverImage src={book.cover} alt={`${book.title}の表紙`} fallback={<div className="cover-placeholder"><BookOpen /><span>NO COVER</span></div>} /><span className={`status ${statusClass[book.status]}`}>{book.status}</span></div>
+function BookCard({ book, onClick, onZoom }: { book: Book; onClick: () => void; onZoom: (z: Zoom) => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
+  <div className="cover-wrap"><CoverImage src={book.cover} alt={`${book.title}の表紙`} onZoom={onZoom} fallback={<div className="cover-placeholder"><BookOpen /><span>NO COVER</span></div>} /><span className={`status ${statusClass[book.status]}`}>{book.status}</span></div>
   <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><p className="author">{book.author || '著者未登録'}</p><div className="card-meta"><span>{book.baseMonth?.replace('-', '年')}月</span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div>{book.links.length > 0 && <div className="link-chips">{book.links.slice(0, 2).map(l => <span key={l.id}>{l.type === 'PDF' ? <FileText /> : <NotebookPen />}{l.label}</span>)}</div>}</div>
 </article> }
 
@@ -100,7 +118,7 @@ function BookTable({ books, onSelect }: { books: Book[]; onSelect: (b: Book) => 
 
 function Empty({ onAdd, hasBooks }: { onAdd: () => void; hasBooks: boolean }) { return <div className="empty panel"><div><BookOpen /></div><h2>{hasBooks ? '条件に合う本がありません' : '最初の一冊を登録しましょう'}</h2><p>{hasBooks ? '検索条件や絞り込みを変えてみてください。' : '表紙や読書メモ、関連資料をまとめて管理できます。'}</p>{!hasBooks && <button className="primary-btn" onClick={onAdd}><Plus /> 本を追加する</button>}</div> }
 
-function BookModal({ book, onClose, onSave, onDelete }: { book: Book; onClose: () => void; onSave: (b: Book) => void; onDelete: (id: string) => void }) {
+function BookModal({ book, onClose, onSave, onDelete, onZoom }: { book: Book; onClose: () => void; onSave: (b: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
   const isNew = !book.title
   const [draft, setDraft] = useState<Book>({ ...book, links: book.links.map(l => ({ ...l })) })
   const update = <K extends keyof Book>(key: K, value: Book[K]) => setDraft(d => ({ ...d, [key]: value }))
@@ -108,7 +126,7 @@ function BookModal({ book, onClose, onSave, onDelete }: { book: Book; onClose: (
   const updateLink = (id: string, patch: Partial<BookLink>) => update('links', draft.links.map(l => l.id === id ? { ...l, ...patch } : l))
   const submit = (e: React.FormEvent) => { e.preventDefault(); if (!draft.title.trim()) return; onSave({ ...draft, title: draft.title.trim(), updatedAt: new Date().toISOString() }) }
   return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}><section className="modal"><div className="modal-head"><div><p className="eyebrow">{isNew ? 'NEW BOOK' : 'BOOK DETAILS'}</p><h2>{isNew ? '本を追加' : '本の詳細・編集'}</h2></div><button className="icon-btn" onClick={onClose}><X /></button></div><form onSubmit={submit}>
-    <div className="form-layout"><div className="cover-editor"><CoverImage src={draft.cover} alt="表紙プレビュー" fallback={<div className="cover-placeholder"><BookOpen /><span>{draft.cover ? '表示できません' : '表紙プレビュー'}</span></div>} /><label>表紙画像URL<input value={draft.cover} onChange={e => update('cover', e.target.value)} placeholder="画像URL または Google Driveの共有リンク" />{draft.cover && <small className="cover-hint">Google Driveの画像は共有設定を「リンクを知っている全員」にしてください。</small>}</label></div>
+    <div className="form-layout"><div className="cover-editor"><CoverImage src={draft.cover} alt={`${draft.title || '表紙'}のプレビュー`} onZoom={onZoom} fallback={<div className="cover-placeholder"><BookOpen /><span>{draft.cover ? '表示できません' : '表紙プレビュー'}</span></div>} /><label>表紙画像URL<input value={draft.cover} onChange={e => update('cover', e.target.value)} placeholder="画像URL または Google Driveの共有リンク" />{draft.cover && <small className="cover-hint">Google Driveの画像は共有設定を「リンクを知っている全員」にしてください。</small>}</label></div>
     <div className="fields"><label>タイトル <em>必須</em><input required value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" /></label><label>著者<input value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" /></label><div className="field-row"><label>分類<select value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select></label><label>基準月<input type="month" value={draft.baseMonth} onChange={e => update('baseMonth', e.target.value)} /></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>メモ<textarea rows={4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder="感想、読みたい章、キーワードなど" /></label></div></div>
     <div className="links-section"><div className="section-title"><div><h3>関連リンク</h3><p>PDFやNotebookLMのノートをまとめておけます。</p></div><button type="button" className="secondary-btn" onClick={addLink}><Plus /> リンクを追加</button></div>{draft.links.length === 0 ? <p className="links-empty">関連リンクはまだありません。</p> : draft.links.map(link => <div className="link-editor" key={link.id}><select value={link.type} onChange={e => updateLink(link.id, { type: e.target.value as LinkType })}><option>PDF</option><option>NotebookLM</option><option>その他</option></select><input value={link.label} onChange={e => updateLink(link.id, { label: e.target.value })} placeholder="表示名" /><input type="url" value={link.url} onChange={e => updateLink(link.id, { url: e.target.value })} placeholder="https://..." />{link.url && <a href={link.url} target="_blank" rel="noreferrer" aria-label="新しいタブで開く"><ExternalLink /></a>}<button type="button" onClick={() => update('links', draft.links.filter(l => l.id !== link.id))} aria-label="リンクを削除"><Trash2 /></button></div>)}</div>
     <div className="modal-actions">{!isNew && <button type="button" className="danger-btn" onClick={() => onDelete(draft.id)}><Trash2 /> 削除</button>}<span /><button type="button" className="ghost-btn" onClick={onClose}>キャンセル</button><button className="primary-btn">{isNew ? '本を登録する' : '変更を保存'}</button></div>

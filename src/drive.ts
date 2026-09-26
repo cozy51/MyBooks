@@ -177,14 +177,52 @@ export function pickImage(folderId: string): Promise<string | null> {
   }))
 }
 
-/** 保存先フォルダをPickerで選んでもらい、このアプリにそのフォルダへのアクセスを許可する */
-export async function grantFolderAccess(): Promise<boolean> {
+/** フォルダをPickerで選んでもらい、このアプリにそのフォルダへのアクセスを許可する */
+export async function grantFolderAccess(folderId = DATA_FOLDER_ID, label = 'MyBooks'): Promise<boolean> {
   if (!DRIVE_API_KEY || !DRIVE_APP_ID) throw new Error('フォルダの許可には VITE_GOOGLE_API_KEY と VITE_GOOGLE_APP_ID の設定が必要です（READMEを参照）')
   const id = await openPicker(picker => {
     const view = new picker.DocsView(picker.ViewId.FOLDERS).setSelectFolderEnabled(true).setIncludeFolders(true).setMimeTypes('application/vnd.google-apps.folder')
-    return { view: view.setFileIds?.(DATA_FOLDER_ID) ?? view, title: '「MyBooks」フォルダを選んで「選択」を押してください' }
+    return { view: view.setFileIds?.(folderId) ?? view, title: `「${label}」フォルダを選んで「選択」を押してください` }
   })
   if (id === null) return false
-  if (id !== DATA_FOLDER_ID) throw new Error('選んだフォルダが保存先のMyBooksフォルダではありません。もう一度お試しください')
+  if (id !== folderId) throw new Error(`選んだフォルダが「${label}」フォルダではありません。もう一度お試しください`)
   return true
+}
+
+const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg' }
+/** ファイル名に使えない文字を置き換える */
+const safeName = (name: string) => name.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 120) || '表紙'
+
+async function createImage(token: string, image: Blob, name: string, folderId: string): Promise<string> {
+  const ext = IMAGE_EXT[image.type] ?? 'png'
+  const form = new FormData()
+  form.append('metadata', new Blob([JSON.stringify({ name: `${safeName(name)}.${ext}`, parents: [folderId] })], { type: 'application/json' }))
+  form.append('file', image)
+  const res = await call(token, `${UPLOAD}?uploadType=multipart&fields=id`, { method: 'POST', body: form })
+  if (res.status === 403 || res.status === 404) throw new FolderAccessError('表紙フォルダへのアクセスが許可されていません')
+  const { id } = await json<{ id: string }>(res)
+  // アプリで表紙を表示できるよう「リンクを知っている全員が閲覧可」にする（失敗しても続行）
+  await call(token, `${API}/${id}/permissions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: 'reader', type: 'anyone' }) }).catch(() => undefined)
+  return id
+}
+
+/** 画像を表紙フォルダに「タイトル.拡張子」で保存し、そのファイルIDを返す。未許可なら許可を求めてから再試行 */
+export async function uploadCoverImage(image: Blob, title: string, folderId: string): Promise<string | null> {
+  const token = storedToken() ?? await signIn()
+  try { return await createImage(token, image, title, folderId) } catch (e) {
+    if (!(e instanceof FolderAccessError)) throw e
+    if (!confirm('初回のみ、表紙フォルダへのアクセスを許可する必要があります。\nGoogleの選択画面で表紙フォルダを選んで「選択」を押してください。')) return null
+    if (!await grantFolderAccess(folderId, '表紙')) return null
+    return createImage(storedToken() ?? await signIn(), image, title, folderId)
+  }
+}
+
+/** クリップボードの画像を読み取る（画像が無ければ null） */
+export async function readClipboardImage(): Promise<Blob | null> {
+  if (!navigator.clipboard?.read) throw new Error('このブラウザではボタンからの貼り付けに対応していません。画面上で Ctrl+V（⌘+V）を押して貼り付けてください')
+  for (const item of await navigator.clipboard.read()) {
+    const type = item.types.find(t => t.startsWith('image/'))
+    if (type) return item.getType(type)
+  }
+  return null
 }

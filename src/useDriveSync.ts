@@ -7,7 +7,7 @@ const SAVE_DELAY = 1500
 
 /** syncedAt: 最後に同期したときのDriveファイルの更新日時 / dirty: Driveに未保存の変更があるか */
 interface Meta { fileId?: string; syncedAt?: string; dirty: boolean; lastSync?: string }
-export type SyncStatus = 'unavailable' | 'signedOut' | 'syncing' | 'synced' | 'pending' | 'error'
+export type SyncStatus = 'unavailable' | 'signedOut' | 'needsFolder' | 'syncing' | 'synced' | 'pending' | 'error'
 
 function loadMeta(storeKey: string): Meta {
   // 一度も同期していない場合、このブラウザで編集済みのデータがあれば未保存扱いにする
@@ -58,7 +58,7 @@ export function useDriveSync(storeKey: string, books: Book[], applyRemote: (book
       else saveMeta({ lastSync: new Date().toISOString() })
       setStatus(meta.current.dirty ? 'pending' : 'synced')
     } catch (e) {
-      setStatus(e instanceof drive.DriveAuthError ? 'signedOut' : 'error')
+      setStatus(e instanceof drive.DriveAuthError ? 'signedOut' : e instanceof drive.FolderAccessError ? 'needsFolder' : 'error')
       setMessage(e instanceof Error ? e.message : String(e))
     } finally { busy.current = false }
   }, [applyRemote])
@@ -68,6 +68,10 @@ export function useDriveSync(storeKey: string, books: Book[], applyRemote: (book
   }, [sync])
 
   const syncNow = useCallback(() => { const token = drive.storedToken(); return token ? sync(token) : connect() }, [sync, connect])
+
+  const grantFolder = useCallback(async () => {
+    try { if (await drive.grantFolderAccess()) await syncNow() } catch (e) { setMessage(e instanceof Error ? e.message : String(e)) }
+  }, [syncNow])
 
   const disconnect = useCallback(() => { drive.signOut(); setStatus('signedOut'); setMessage('') }, [])
 
@@ -90,5 +94,5 @@ export function useDriveSync(storeKey: string, books: Book[], applyRemote: (book
     return () => clearTimeout(timer)
   }, [status, books, sync])
 
-  return { status, message, lastSync, markDirty, connect, syncNow, disconnect }
+  return { status, message, lastSync, markDirty, connect, syncNow, grantFolder, disconnect }
 }

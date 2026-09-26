@@ -50,14 +50,17 @@ CSVの「表紙画像URL」列には、DriveのファイルID・共有リンク�
 
 ### Google Driveへの自動保存（推奨）
 
-Googleアカウントでログインすると、本棚のデータをマイドライブの `MyBooks-library.json` に自動保存します。別のPCやスマートフォンからログインしても同じデータを使えます。
+Googleアカウントでログインすると、本棚のデータをGoogle Driveの [MyBooksフォルダ](https://drive.google.com/drive/folders/12T2RtZHu_lpq8_zVeExmYHiAh_v7cKIW)（マイドライブ > WebAppsData > MyBooks）内の `MyBooks-library.json` に自動保存します。別のPCやスマートフォンからログインしても同じデータを使えます。
 
 1. ヘッダー右上の「Driveに接続」（スマートフォンでは雲のアイコン）を押し、「Googleでログインして接続」を選びます。
 2. 初回はGoogleの許可画面が出るので、MyBooksにGoogle Driveへのアクセスを許可します。
    - 許可の範囲は `drive.file` です。**このアプリが作成したファイルにだけ**アクセスでき、ほかのDriveのファイルは読み書きしません。
-3. 以降は本を追加・編集するたびに、自動でDriveに保存されます。ヘッダーのボタンで状態（保存待ち・同期中・Drive保存済み）が分かります。
+3. 初回のみ「フォルダの許可が必要」と表示されます。「MyBooksフォルダを許可」を押し、Googleの選択画面でMyBooksフォルダを選んで「選択」を押してください。これで、アプリがこのフォルダにファイルを作れるようになります。
+4. 以降は本を追加・編集するたびに、自動でDriveに保存されます。ヘッダーのボタンで状態（保存待ち・同期中・Drive保存済み）が分かります。
 
 補足：
+
+- 保存先フォルダと保存ファイルは**名前ではなくID**で扱います。フォルダは作成せず、フォルダ内に `MyBooks-library.json` が無いときだけ1回作成します。以後はそのファイルIDを使って更新するため、同じ名前のファイルやフォルダが増えることはありません（フォルダ内に同名ファイルが複数あった場合も、最初に作られたものだけを使います）。
 
 - ページを開くと、Driveの最新データを自動で読み込みます（同じタブでログイン済みの場合）。ブラウザを閉じたあとや、ログインから約1時間が経ったあとは、もう一度「Driveに接続」を押してください。
 - このブラウザに未保存の変更があり、別の端末でDriveのデータも更新されていた場合は、どちらのデータを残すかを確認するダイアログが出ます。
@@ -83,8 +86,10 @@ Driveに保存するには、Google CloudでOAuthクライアントIDを作成�
    - リダイレクトURIは不要です。
 5. 作成された「クライアントID」（`xxxx.apps.googleusercontent.com`）をコピーします。クライアントシークレットは使いません。
 6. Vercelのプロジェクトで **Settings → Environment Variables** に `VITE_GOOGLE_CLIENT_ID` を追加し、値にクライアントIDを貼り付けます。その後、**Deployments** から再デプロイします（環境変数はビルド時に埋め込まれるため、再デプロイが必要です）。
-7. 「Driveから選ぶ」（Google Picker）を使う場合は、**APIとサービス → ライブラリ** で「Google Picker API」も有効にし、**認証情報 → 認証情報を作成 → APIキー** でAPIキーを作成します。APIキーには「ウェブサイトの制限」で公開URLと `http://localhost:5173/*` を、「APIの制限」で Google Picker API を設定してください。作成したキーをVercelの環境変数 `VITE_GOOGLE_API_KEY` に設定して再デプロイします。未設定の場合、「Driveから選ぶ」ボタンは表示されません（IDや共有リンクの貼り付けは使えます）。
-8. 表紙フォルダを変える場合は、環境変数 `VITE_DRIVE_COVER_FOLDER_ID` にフォルダIDを設定します（未設定時は上記の表紙フォルダ）。
+7. Google Picker（保存先フォルダの許可と「Driveから選ぶ」）のために、**APIとサービス → ライブラリ** で「Google Picker API」も有効にし、**認証情報 → 認証情報を作成 → APIキー** でAPIキーを作成します。APIキーには「ウェブサイトの制限」で公開URLと `http://localhost:5173/*` を、「APIの制限」で Google Picker API を設定してください。作成したキーをVercelの環境変数 `VITE_GOOGLE_API_KEY` に設定します。
+   - あわせて、Google Cloudの**プロジェクト番号**（ダッシュボードの「プロジェクト情報」にある数字）を環境変数 `VITE_GOOGLE_APP_ID` に設定し、再デプロイします。保存先フォルダの許可に必要です。
+   - `VITE_GOOGLE_API_KEY` が未設定の場合、「Driveから選ぶ」ボタンは表示されません（IDや共有リンクの貼り付けは使えます）。
+8. 保存先フォルダを変える場合は `VITE_DRIVE_DATA_FOLDER_ID`、表紙フォルダを変える場合は `VITE_DRIVE_COVER_FOLDER_ID` にフォルダIDを設定します（未設定時は上記のフォルダ）。
 9. ローカルで試す場合は、`.env.example` を `.env.local` にコピーしてクライアントIDを書き込みます。
 
 ## Vercelへの公開

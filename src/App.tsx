@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { BookOpen, ChevronRight, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FileText, FolderOpen, Grid2X2, List, LoaderCircle, LogOut, RefreshCw, NotebookPen, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
 import { COVER_FOLDER_ID, COVER_FOLDER_URL, coverSources, driveFileUrl, normalizeCover } from './cover'
 import { categories, sampleBooks } from './data'
-import { DRIVE_API_KEY, DRIVE_CLIENT_ID, DRIVE_FILE_NAME, pickImage } from './drive'
+import { DATA_FOLDER_URL, DRIVE_API_KEY, DRIVE_CLIENT_ID, DRIVE_FILE_NAME, pickImage } from './drive'
 import { useDriveSync, type SyncStatus } from './useDriveSync'
 import type { Book, BookLink, LinkType, ReadingStatus } from './types'
 
@@ -147,12 +147,12 @@ function BookModal({ book, onClose, onSave, onDelete, onZoom }: { book: Book; on
   </form></section></div>
 }
 
-const syncLabel: Record<SyncStatus, string> = { unavailable: '保存・バックアップ', signedOut: 'Driveに接続', syncing: '同期中…', synced: 'Drive保存済み', pending: '保存待ち', error: '同期エラー' }
+const syncLabel: Record<SyncStatus, string> = { unavailable: '保存・バックアップ', signedOut: 'Driveに接続', needsFolder: 'フォルダの許可が必要', syncing: '同期中…', synced: 'Drive保存済み', pending: '保存待ち', error: '同期エラー' }
 function SyncIcon({ status }: { status: SyncStatus }) {
   if (status === 'syncing') return <LoaderCircle className="spin" />
   if (status === 'synced') return <CloudCheck />
   if (status === 'pending') return <CloudUpload />
-  if (status === 'error') return <CloudAlert />
+  if (status === 'error' || status === 'needsFolder') return <CloudAlert />
   if (status === 'signedOut') return <CloudOff />
   return <Cloud />
 }
@@ -161,11 +161,15 @@ function DriveSection({ drive }: { drive: ReturnType<typeof useDriveSync> }) {
   if (drive.status === 'unavailable') return <div className="backup-info"><CloudOff /><div><strong>Google Drive保存は未設定です</strong><p>環境変数 <code>VITE_GOOGLE_CLIENT_ID</code> を設定すると、Google Driveに自動保存できます（READMEを参照）。現在はこのブラウザ内にのみ保存されています。</p></div></div>
   const connected = drive.status !== 'signedOut'
   return <div className={`backup-info drive-info sync-${drive.status}`}><SyncIcon status={drive.status} /><div>
-    <strong>{connected ? `Google Driveに自動保存しています（${syncLabel[drive.status]}）` : 'Google Driveに接続していません'}</strong>
-    <p>{connected ? <>マイドライブの <code>{DRIVE_FILE_NAME}</code> に保存し、別の端末とも同じデータを使えます。</> : '接続すると、本棚のデータをGoogle Driveに自動保存し、別の端末でも同じデータを使えます。'}
+    <strong>{drive.status === 'needsFolder' ? '保存先フォルダへのアクセスを許可してください' : connected ? `Google Driveに自動保存しています（${syncLabel[drive.status]}）` : 'Google Driveに接続していません'}</strong>
+    <p>{drive.status === 'needsFolder'
+      ? <>初回のみ、Googleの選択画面で保存先の <a href={DATA_FOLDER_URL} target="_blank" rel="noreferrer">MyBooksフォルダ</a> を選んで「選択」を押すと、そのフォルダに <code>{DRIVE_FILE_NAME}</code> を作成して保存します。</>
+      : connected ? <><a href={DATA_FOLDER_URL} target="_blank" rel="noreferrer">MyBooksフォルダ</a> の <code>{DRIVE_FILE_NAME}</code> に保存し、別の端末とも同じデータを使えます。</> : '接続すると、本棚のデータをGoogle DriveのMyBooksフォルダに自動保存し、別の端末でも同じデータを使えます。'}
       {drive.lastSync && <><br />最終同期：{new Date(drive.lastSync).toLocaleString('ja-JP')}</>}</p>
     {drive.message && <p className="drive-error">{drive.message}</p>}
-    <div className="drive-actions">{connected
+    <div className="drive-actions">{drive.status === 'needsFolder'
+      ? <><button className="primary-btn" onClick={() => void drive.grantFolder()}><FolderOpen /> MyBooksフォルダを許可</button><button className="ghost-btn" onClick={drive.disconnect}><LogOut /> 接続を解除</button></>
+      : connected
       ? <><button className="secondary-btn" disabled={drive.status === 'syncing'} onClick={() => void drive.syncNow()}><RefreshCw /> 今すぐ同期</button><button className="ghost-btn" onClick={drive.disconnect}><LogOut /> 接続を解除</button></>
       : <button className="primary-btn" onClick={() => void drive.connect()}><Cloud /> Googleでログインして接続</button>}</div>
   </div></div>

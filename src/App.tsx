@@ -151,6 +151,8 @@ function BookModal({ book, onClose, onSave, onDelete, onZoom }: { book: Book; on
     try { const id = await pickImage(COVER_FOLDER_ID); if (id) update('cover', id) } catch (e) { alert(e instanceof Error ? e.message : String(e)) }
   }
   const [uploading, setUploading] = useState(false)
+  const uploadRef = useRef<Promise<string | null> | null>(null)
+  const closingRef = useRef(false)
   // クリップボードの画像を表紙フォルダに「タイトル.拡張子」で保存し、そのファイルIDを表紙にする
   const pasteCover = async (image?: Blob) => {
     if (uploading) return
@@ -160,16 +162,28 @@ function BookModal({ book, onClose, onSave, onDelete, onZoom }: { book: Book; on
       image ??= await readClipboardImage() ?? undefined
       if (!image) return alert('クリップボードに画像がありません。表紙の画像をコピーしてから押してください')
       setUploading(true)
-      const id = await uploadCoverImage(image, title, COVER_FOLDER_ID)
+      uploadRef.current = uploadCoverImage(image, title, COVER_FOLDER_ID)
+      const id = await uploadRef.current
       if (id) update('cover', id)
-    } catch (e) { alert(e instanceof Error ? e.message : String(e)) } finally { setUploading(false) }
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)) } finally { uploadRef.current = null; setUploading(false) }
   }
   const onPaste = (e: React.ClipboardEvent) => {
     const image = canPasteCover ? Array.from(e.clipboardData.files).find(f => f.type.startsWith('image/')) : undefined
     if (image) { e.preventDefault(); void pasteCover(image) }
   }
-  const submit = (e: React.FormEvent) => { e.preventDefault(); if (!draft.title.trim()) return; onSave({ ...draft, title: draft.title.trim(), links: cleanLinks(draft.links), updatedAt: new Date().toISOString() }) }
-  return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}><section className="modal" onPaste={onPaste}><div className="modal-head"><div><p className="eyebrow">{isNew ? 'NEW BOOK' : 'BOOK DETAILS'}</p><h2>{isNew ? '本を追加' : '本の詳細・編集'}</h2></div><button className="icon-btn" onClick={onClose}><X /></button></div><form onSubmit={submit}>
+  const finalize = (b: Book): Book => ({ ...b, title: b.title.trim(), links: cleanLinks(b.links), updatedAt: new Date().toISOString() })
+  const submit = (e: React.FormEvent) => { e.preventDefault(); if (!draft.title.trim()) return; onSave(finalize(draft)) }
+  // 外側のクリックや×で閉じるときは、今の内容を保存してから閉じる（表紙のアップロード中なら完了を待つ）
+  const saveAndClose = async () => {
+    if (closingRef.current) return
+    closingRef.current = true
+    let current = draft
+    if (uploadRef.current) { const id = await uploadRef.current.catch(() => null); if (id) current = { ...current, cover: id } }
+    const same = (a: Book, b: Book) => JSON.stringify({ ...finalize(a), updatedAt: '' }) === JSON.stringify({ ...finalize(b), updatedAt: '' })
+    if (!current.title.trim() || same(current, book)) onClose()
+    else onSave(finalize(current))
+  }
+  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) void saveAndClose() }}><section className="modal" onPaste={onPaste}><div className="modal-head"><div><p className="eyebrow">{isNew ? 'NEW BOOK' : 'BOOK DETAILS'}</p><h2>{isNew ? '本を追加' : '本の詳細・編集'}</h2></div><button className="icon-btn" onClick={() => void saveAndClose()} title="保存して閉じる"><X /></button></div><form onSubmit={submit}>
     <div className="form-layout"><div className="cover-editor"><CoverImage src={draft.cover} alt={`${draft.title || '表紙'}のプレビュー`} onZoom={onZoom} fallback={canPasteCover
       ? <button type="button" className="cover-placeholder paste-target" onClick={() => void pasteCover()} disabled={uploading} title="クリップボードの画像を表紙として保存">{uploading ? <><LoaderCircle className="spin" /><span>アップロード中…</span></> : <><ClipboardPaste /><span>{draft.cover ? '表示できません' : 'クリックして'}<br />クリップボードの<br />画像を貼り付け</span></>}</button>
       : <div className="cover-placeholder"><BookOpen /><span>{draft.cover ? '表示できません' : '表紙プレビュー'}</span></div>} /><div className="cover-fields"><label>表紙（DriveのファイルID）<input value={draft.cover} onChange={e => update('cover', normalizeCover(e.target.value))} placeholder="ファイルID・共有リンク・画像URL" /></label>

@@ -18,10 +18,10 @@ function lastCategory() {
   return 'd1'
 }
 const LAST_BASE_MONTH = 'mybooks-last-base-month'
-/** 前回保存した本の基準月（新しい本の初期値に使う。空欄で保存していれば空欄、未保存なら今月） */
+/** 前回保存した本の基準月（新しい本の初期値に使う。まだ保存していなければ空欄） */
 function lastBaseMonth() {
   try { const month = localStorage.getItem(LAST_BASE_MONTH); if (month === '' || (month && /^\d{4}-\d{2}$/.test(month))) return month } catch { /* noop */ }
-  return new Date().toISOString().slice(0, 7)
+  return ''
 }
 const emptyBook = (): Book => ({ id: crypto.randomUUID(), title: '', author: '', categoryId: lastCategory(), cover: '', baseMonth: lastBaseMonth(), status: '未読', memo: '', links: [], updatedAt: new Date().toISOString() })
 
@@ -49,7 +49,7 @@ function App() {
   const filtered = useMemo(() => books.filter(book => {
     const cat = categories.find(c => c.id === book.categoryId)
     const parent = categories.find(c => c.id === cat?.parent)
-    const haystack = `${book.title} ${book.author} ${book.memo} ${cat?.name} ${parent?.name}`.toLowerCase()
+    const haystack = `${book.title} ${book.author} ${book.memo} ${cat?.name} ${parent?.name} ${book.baseMonth}`.toLowerCase()
     const categoryMatch = category === 'all' || book.categoryId === category || cat?.parent === category
     return haystack.includes(query.toLowerCase()) && categoryMatch && (status === 'all' || book.status === status)
   }), [books, query, category, status])
@@ -98,7 +98,7 @@ function App() {
       <section className="welcome"><div><p className="eyebrow">MY PERSONAL LIBRARY</p><h1>本棚を、もっと身近に。</h1><p>{books.length}冊の本と、学びの記録をひとつの場所で管理しています。</p></div><div className="stat"><span>読書中</span><strong>{books.filter(b => b.status === '読書中').length}</strong><BookOpen /></div></section>
 
       <section className="toolbar panel">
-        <label className="search"><Search /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="タイトル、著者、分類、要約から検索" />{query && <button onClick={() => setQuery('')}><X /></button>}</label>
+        <label className="search"><Search /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="タイトル、著者、分類、要約、基準月（YYYY-MM）から検索" />{query && <button onClick={() => setQuery('')}><X /></button>}</label>
         <select value={category} onChange={e => setCategory(e.target.value)} aria-label="分類で絞り込み"><option value="all">すべての分類</option>{categories.map(c => <option key={c.id} value={c.id}>{c.parent ? '　└ ' : ''}{c.name}</option>)}</select>
         <select value={status} onChange={e => setStatus(e.target.value)} aria-label="読書状況で絞り込み"><option value="all">すべての読書状況</option><option>未読</option><option>読書中</option><option>読了</option></select>
       </section>
@@ -145,7 +145,7 @@ function CoverLightbox({ src, alt, onClose }: Zoom & { onClose: () => void }) {
 function categoryPath(id: string) { const child = categories.find(c => c.id === id); const parent = categories.find(c => c.id === child?.parent); return { child, parent } }
 function BookCard({ no, book, onClick, onZoom }: { no: number; book: Book; onClick: () => void; onZoom: (z: Zoom) => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
   <div className="cover-wrap"><CoverImage src={book.cover} alt={`${book.title}の表紙`} onZoom={onZoom} fallback={<div className="cover-placeholder"><BookOpen /><span>NO COVER</span></div>} /></div>
-  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><p className="author">{book.author || '著者未登録'}</p>{book.memo.trim() && <CopySummaryButton text={book.memo} />}<span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left"><span className={`status mini ${statusClass[book.status]}`}>{book.status}</span><span>{book.baseMonth?.replace('-', '年')}月</span></span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div><CardLinks links={book.links} /></div>
+  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><p className="author">{book.author || '著者未登録'}</p>{book.memo.trim() && <CopySummaryButton text={book.memo} />}<span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left"><span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{book.baseMonth && <span>{book.baseMonth.replace('-', '年')}月</span>}</span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div><CardLinks links={book.links} /></div>
 </article> }
 
 /** カードの要約コピーボタン（場所をとらないよう小さなアイコンのみ） */

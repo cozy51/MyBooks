@@ -105,10 +105,10 @@ function App() {
 
       <div className="content-heading" ref={headingRef}><div><h2>すべての本</h2><span>{pageCount > 1 ? `${filtered.length}冊中 ${pageStart + 1}〜${pageStart + pageBooks.length}冊を表示` : `${filtered.length}冊を表示`}</span></div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button></div></div>
 
+      {pageCount > 1 && <Pager page={page} pageCount={pageCount} onChange={goPage} />}
       {filtered.length === 0 ? <Empty onAdd={() => setEditing(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
         <div className="book-grid">{pageBooks.map(book => <BookCard key={book.id} book={book} onClick={() => setEditing(book)} onZoom={setZoomed} />)}</div> :
         <BookTable books={pageBooks} onSelect={setEditing} />}
-      {pageCount > 1 && <Pager page={page} pageCount={pageCount} onChange={goPage} />}
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}

@@ -23,6 +23,14 @@ function lastBaseMonth() {
   try { const month = localStorage.getItem(LAST_BASE_MONTH); if (month === '' || (month && /^\d{4}-\d{2}$/.test(month))) return month } catch { /* noop */ }
   return ''
 }
+/** 基準月の入力をYYYY-MMにそろえる（2026-9・2026/09・202609・全角数字も可）。読めないときはnull、空欄は空欄 */
+function normalizeMonth(value: string): string | null {
+  const text = value.trim().replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+  if (!text) return ''
+  const m = text.match(/^(\d{4})\s*[-/.年]?\s*(\d{1,2})\s*月?$/)
+  const month = m ? Number(m[2]) : 0
+  return m && month >= 1 && month <= 12 ? `${m[1]}-${String(month).padStart(2, '0')}` : null
+}
 const emptyBook = (): Book => ({ id: crypto.randomUUID(), title: '', author: '', categoryId: lastCategory(), cover: '', baseMonth: lastBaseMonth(), status: '未読', memo: '', links: [], updatedAt: new Date().toISOString() })
 
 // 表紙はDriveのファイルIDで保持する（以前の共有リンク形式もIDにそろえる）
@@ -46,6 +54,8 @@ function App() {
   const storeBooks = useCallback((books: Book[]) => { const next = withCoverIds(books); setBooks(next); localStorage.setItem(STORE, JSON.stringify(next)) }, [])
   const drive = useDriveSync(STORE, books, storeBooks)
   const saveBooks = (next: Book[]) => { storeBooks(next); drive.markDirty() }
+  // 基準月の候補（今月と、登録済みの本で使っている月を新しい順に）
+  const monthOptions = useMemo(() => [...new Set([new Date().toISOString().slice(0, 7), ...books.map(b => b.baseMonth).filter(Boolean)])].sort().reverse(), [books])
   const filtered = useMemo(() => books.filter(book => {
     const cat = categories.find(c => c.id === book.categoryId)
     const parent = categories.find(c => c.id === cat?.parent)
@@ -113,7 +123,7 @@ function App() {
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
-    {editing && <BookModal book={editing} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={book => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
+    {editing && <BookModal book={editing} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={book => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>
@@ -166,7 +176,7 @@ function Empty({ onAdd, hasBooks }: { onAdd: () => void; hasBooks: boolean }) { 
 const canPickCover = Boolean(DRIVE_CLIENT_ID && DRIVE_API_KEY)
 const canPasteCover = Boolean(DRIVE_CLIENT_ID)
 
-function BookModal({ book, onClose, onSave, onDelete, onZoom }: { book: Book; onClose: () => void; onSave: (b: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
+function BookModal({ book, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; monthOptions: string[]; onClose: () => void; onSave: (b: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
   const isNew = !book.title
   const [draft, setDraft] = useState<Book>({ ...book, links: withPresetRows(book.links) })
   const update = <K extends keyof Book>(key: K, value: Book[K]) => setDraft(d => ({ ...d, [key]: value }))
@@ -196,7 +206,9 @@ function BookModal({ book, onClose, onSave, onDelete, onZoom }: { book: Book; on
     if (image) { e.preventDefault(); void pasteCover(image) }
   }
   const finalize = (b: Book): Book => ({ ...b, title: b.title.trim(), links: cleanLinks(b.links), updatedAt: new Date().toISOString() })
-  const submit = (e: React.FormEvent) => { e.preventDefault(); if (!draft.title.trim()) return; onSave(finalize(draft)) }
+  const [monthError, setMonthError] = useState(false)
+  const fixMonth = () => { const month = normalizeMonth(draft.baseMonth); setMonthError(month === null); if (month !== null) update('baseMonth', month); return month }
+  const submit = (e: React.FormEvent) => { e.preventDefault(); if (!draft.title.trim()) return; const baseMonth = fixMonth(); if (baseMonth === null) return; onSave(finalize({ ...draft, baseMonth })) }
   // 外側のクリックや×で閉じるときは、今の内容を保存してから閉じる（表紙のアップロード中なら完了を待つ）
   const saveAndClose = async () => {
     if (closingRef.current) return
@@ -213,7 +225,7 @@ function BookModal({ book, onClose, onSave, onDelete, onZoom }: { book: Book; on
       : <div className="cover-placeholder"><BookOpen /><span>{draft.cover ? '表示できません' : '表紙プレビュー'}</span></div>} /><div className="cover-fields"><label>表紙（DriveのファイルID）<input value={draft.cover} onChange={e => update('cover', normalizeCover(e.target.value))} placeholder="ファイルID・共有リンク・画像URL" /></label>
       <div className="cover-actions">{canPasteCover && <button type="button" className="secondary-btn" onClick={() => void pasteCover()} disabled={uploading}>{uploading ? <LoaderCircle className="spin" /> : <ClipboardPaste />} {uploading ? 'アップロード中…' : '画像を貼り付け'}</button>}{canPickCover && <button type="button" className="secondary-btn" onClick={pickCover}><FolderOpen /> Driveから選ぶ</button>}<a href={driveFileUrl(draft.cover) ?? COVER_FOLDER_URL} target="_blank" rel="noreferrer"><ExternalLink />{driveFileUrl(draft.cover) ? 'Driveで開く' : '表紙フォルダを開く'}</a></div>
       <small className="cover-hint">{canPasteCover && 'コピーした画像は、表紙フォルダに「タイトル名」のファイルとして保存されます（Ctrl+Vでも可）。'}表紙フォルダの画像はファイルIDで保存します。共有リンクを貼るとIDに変換されます。表示するには、フォルダの共有設定を「リンクを知っている全員」にしてください。</small></div></div>
-    <div className="fields"><label>タイトル <em>必須</em><input required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" /></label><label>著者<input value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" /></label><div className="field-row"><label>分類<select value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select></label><label>基準月<input type="month" value={draft.baseMonth} onChange={e => update('baseMonth', e.target.value)} /></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約<textarea rows={4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder="本の要約" /></label></div></div>
+    <div className="fields"><label>タイトル <em>必須</em><input required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" /></label><label>著者<input value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" /></label><div className="field-row"><label>分類<select value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select></label><label>基準月<input className={monthError ? 'invalid' : undefined} list="base-month-options" inputMode="numeric" autoComplete="off" placeholder="YYYY-MM（空欄可）" value={draft.baseMonth} onChange={e => { update('baseMonth', e.target.value); setMonthError(false) }} onBlur={fixMonth} />{monthError && <small className="field-error">YYYY-MM の形式で入力してください（例：2026-09）</small>}<datalist id="base-month-options">{monthOptions.map(m => <option key={m} value={m} />)}</datalist></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約<textarea rows={4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder="本の要約" /></label></div></div>
     <div className="links-section"><div className="section-title"><div><h3>関連リンク</h3><p>表示名は候補から選ぶか入力します。左端の <GripVertical className="inline-icon" /> をドラッグして並べ替えられます。URLが空の欄は保存されません。</p></div><button type="button" className="secondary-btn" onClick={addLink}><Plus /> リンクを追加</button></div><LinkEditor links={draft.links} onChange={links => update('links', links)} /></div>
     <div className="modal-actions">{!isNew && <button type="button" className="danger-btn" onClick={() => onDelete(draft.id)}><Trash2 /> 削除</button>}<span /><button type="button" className="ghost-btn" onClick={onClose}>キャンセル</button><button className="primary-btn">{isNew ? '本を登録する' : '変更を保存'}</button></div>
   </form></section></div>

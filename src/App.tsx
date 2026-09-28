@@ -109,6 +109,7 @@ function App() {
       {filtered.length === 0 ? <Empty onAdd={() => setEditing(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
         <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} onClick={() => setEditing(book)} onZoom={setZoomed} />)}</div> :
         <BookTable books={pageBooks} startNo={pageStart + 1} onSelect={setEditing} />}
+      {pageCount > 1 && <Pager className="pager-bottom" page={page} pageCount={pageCount} onChange={goPage} />}
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
@@ -263,7 +264,7 @@ function splitCsv(line: string) { const values: string[] = []; let value = '', q
 function parseCsvLinks(value: string): BookLink[] { return value.split('|').map(v => v.trim()).filter(Boolean).map((entry, i) => { const parts = entry.split('::'); const url = parts.at(-1) ?? ''; const label = parts.length > 1 ? parts.at(-2) ?? '' : ''; return { id: `${crypto.randomUUID()}-${i}`, label, url } }).filter(l => l.url) }
 
 /** 一覧のページ送り（前後ボタンとページ番号。幅に入りきらないときだけ途中を省略） */
-function Pager({ page, pageCount, onChange }: { page: number; pageCount: number; onChange: (page: number) => void }) {
+function Pager({ page, pageCount, onChange, className }: { page: number; pageCount: number; onChange: (page: number) => void; className?: string }) {
   const ref = useRef<HTMLElement>(null)
   const measureRef = useRef<HTMLDivElement>(null)
   const [fitsAll, setFitsAll] = useState(false)
@@ -277,7 +278,7 @@ function Pager({ page, pageCount, onChange }: { page: number; pageCount: number;
   }, [pageCount])
   const all = Array.from({ length: pageCount }, (_, i) => i + 1)
   const numbers = fitsAll ? all : all.filter(n => n === 1 || n === pageCount || Math.abs(n - page) <= 2)
-  return <nav className="pager" ref={ref} aria-label="ページ送り">
+  return <nav className={className ? `pager ${className}` : 'pager'} ref={ref} aria-label="ページ送り">
     <button disabled={page === 1} onClick={() => onChange(page - 1)} aria-label="前のページ"><ChevronLeft /></button>
     {numbers.map((n, i) => <span key={n} className="pager-item">{i > 0 && n - numbers[i - 1] > 1 && <span className="pager-gap">…</span>}<button className={n === page ? 'active' : ''} aria-current={n === page ? 'page' : undefined} onClick={() => onChange(n)}>{n}</button></span>)}
     <button disabled={page === pageCount} onClick={() => onChange(page + 1)} aria-label="次のページ"><ChevronRight /></button>

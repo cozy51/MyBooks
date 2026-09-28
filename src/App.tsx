@@ -83,6 +83,7 @@ function App() {
     </header>
 
     <main>
+      <DriveAlert drive={drive} onDetails={() => setBackupOpen(true)} />
       <section className="welcome"><div><p className="eyebrow">MY PERSONAL LIBRARY</p><h1>本棚を、もっと身近に。</h1><p>{books.length}冊の本と、学びの記録をひとつの場所で管理しています。</p></div><div className="stat"><span>読書中</span><strong>{books.filter(b => b.status === '読書中').length}</strong><BookOpen /></div></section>
 
       <section className="toolbar panel">
@@ -205,7 +206,7 @@ function BookModal({ book, onClose, onSave, onDelete, onZoom }: { book: Book; on
   </form></section></div>
 }
 
-const syncLabel: Record<SyncStatus, string> = { unavailable: '保存・バックアップ', signedOut: 'Driveに接続', needsFolder: 'フォルダの許可が必要', syncing: '同期中…', synced: 'Drive保存済み', pending: '保存待ち', error: '同期エラー' }
+const syncLabel: Record<SyncStatus, string> = { unavailable: '保存・バックアップ', signedOut: 'Drive未接続', needsFolder: 'フォルダの許可が必要', syncing: '同期中…', synced: 'Drive保存済み', pending: '保存待ち', error: '同期エラー' }
 function SyncIcon({ status }: { status: SyncStatus }) {
   if (status === 'syncing') return <LoaderCircle className="spin" />
   if (status === 'synced') return <CloudCheck />
@@ -213,6 +214,16 @@ function SyncIcon({ status }: { status: SyncStatus }) {
   if (status === 'error' || status === 'needsFolder') return <CloudAlert />
   if (status === 'signedOut') return <CloudOff />
   return <Cloud />
+}
+
+// Driveに保存できていない状態は、画面上部にはっきり表示して、その場で接続し直せるようにする
+function DriveAlert({ drive, onDetails }: { drive: ReturnType<typeof useDriveSync>; onDetails: () => void }) {
+  const info = drive.status === 'signedOut' ? { title: 'Google Driveに接続されていません', text: '変更はこのブラウザにだけ保存され、Driveには保存されません。別の端末とも同期されません。', label: 'Googleでログインして接続', action: drive.connect }
+    : drive.status === 'needsFolder' ? { title: 'Google Driveの保存先フォルダが許可されていません', text: '許可するまで、変更はDriveに保存されません。', label: 'MyBooksフォルダを許可', action: drive.grantFolder }
+    : drive.status === 'error' ? { title: 'Google Driveとの同期に失敗しました', text: `${drive.message ? `${drive.message}。` : ''}変更はまだDriveに保存されていません。`, label: '再試行', action: drive.syncNow }
+    : null
+  if (!info) return null
+  return <section className={`drive-alert sync-${drive.status}`} role="alert"><CloudAlert /><div><strong>{info.title}</strong><p>{info.text}</p></div><div className="drive-alert-actions"><button className="ghost-btn" onClick={onDetails}>詳細</button><button className="primary-btn" onClick={() => void info.action()}>{info.label}</button></div></section>
 }
 
 function DriveSection({ drive }: { drive: ReturnType<typeof useDriveSync> }) {

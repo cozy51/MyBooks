@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { BookOpen, Check, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, LogOut, RefreshCw, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, LogOut, RefreshCw, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
 import { COVER_FOLDER_ID, COVER_FOLDER_URL, coverSources, driveFileUrl, normalizeCover } from './cover'
 import { categories, sampleBooks } from './data'
 import { DATA_FOLDER_URL, DRIVE_API_KEY, DRIVE_CLIENT_ID, DRIVE_FILE_NAME, pickImage, readClipboardImage, uploadCoverImage } from './drive'
@@ -9,6 +9,7 @@ import { cleanLinks, newLink, withPresetRows } from './links'
 import type { Book, BookLink, ReadingStatus } from './types'
 
 const STORE = 'mybooks-library-v1'
+const PAGE_SIZE = 100
 const statusClass: Record<ReadingStatus, string> = { '未読': 'unread', '読書中': 'reading', '読了': 'done' }
 const LAST_CATEGORY = 'mybooks-last-category'
 /** 前回保存した本の分類（新しい本の初期値に使う） */
@@ -52,6 +53,16 @@ function App() {
     const categoryMatch = category === 'all' || book.categoryId === category || cat?.parent === category
     return haystack.includes(query.toLowerCase()) && categoryMatch && (status === 'all' || book.status === status)
   }), [books, query, category, status])
+  // 絞り込み条件が変わったら1ページ目に戻す（編集・追加では今のページのまま）
+  const filterKey = `${query}\n${category}\n${status}`
+  const [paging, setPaging] = useState({ key: filterKey, page: 1 })
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  if (paging.key !== filterKey) setPaging({ key: filterKey, page: 1 })
+  const page = paging.key === filterKey ? Math.min(paging.page, pageCount) : 1
+  const pageStart = (page - 1) * PAGE_SIZE
+  const pageBooks = useMemo(() => filtered.slice(pageStart, pageStart + PAGE_SIZE), [filtered, pageStart])
+  const headingRef = useRef<HTMLDivElement>(null)
+  const goPage = (next: number) => { setPaging({ key: filterKey, page: next }); headingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), books }, null, 2)], { type: 'application/json' })
@@ -92,11 +103,12 @@ function App() {
         <select value={status} onChange={e => setStatus(e.target.value)} aria-label="読書状況で絞り込み"><option value="all">すべての読書状況</option><option>未読</option><option>読書中</option><option>読了</option></select>
       </section>
 
-      <div className="content-heading"><div><h2>すべての本</h2><span>{filtered.length}冊を表示</span></div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button></div></div>
+      <div className="content-heading" ref={headingRef}><div><h2>すべての本</h2><span>{pageCount > 1 ? `${filtered.length}冊中 ${pageStart + 1}〜${pageStart + pageBooks.length}冊を表示` : `${filtered.length}冊を表示`}</span></div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button></div></div>
 
       {filtered.length === 0 ? <Empty onAdd={() => setEditing(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
-        <div className="book-grid">{filtered.map(book => <BookCard key={book.id} book={book} onClick={() => setEditing(book)} onZoom={setZoomed} />)}</div> :
-        <BookTable books={filtered} onSelect={setEditing} />}
+        <div className="book-grid">{pageBooks.map(book => <BookCard key={book.id} book={book} onClick={() => setEditing(book)} onZoom={setZoomed} />)}</div> :
+        <BookTable books={pageBooks} onSelect={setEditing} />}
+      {pageCount > 1 && <Pager page={page} pageCount={pageCount} onChange={goPage} />}
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
@@ -249,5 +261,15 @@ function BackupModal({ drive, onClose, onExport, onImport }: { drive: ReturnType
 function splitCsv(line: string) { const values: string[] = []; let value = '', quoted = false; for (let i = 0; i < line.length; i++) { const char = line[i]; if (char === '"' && line[i + 1] === '"') { value += '"'; i++ } else if (char === '"') quoted = !quoted; else if (char === ',' && !quoted) { values.push(value); value = '' } else value += char } values.push(value); return values }
 // 「表示名::URL」を | で区切る。以前の「種類::表示名::URL」形式も読み込める
 function parseCsvLinks(value: string): BookLink[] { return value.split('|').map(v => v.trim()).filter(Boolean).map((entry, i) => { const parts = entry.split('::'); const url = parts.at(-1) ?? ''; const label = parts.length > 1 ? parts.at(-2) ?? '' : ''; return { id: `${crypto.randomUUID()}-${i}`, label, url } }).filter(l => l.url) }
+
+/** 一覧のページ送り（前後ボタンとページ番号。多いときは途中を省略） */
+function Pager({ page, pageCount, onChange }: { page: number; pageCount: number; onChange: (page: number) => void }) {
+  const numbers = Array.from({ length: pageCount }, (_, i) => i + 1).filter(n => n === 1 || n === pageCount || Math.abs(n - page) <= 2)
+  return <nav className="pager" aria-label="ページ送り">
+    <button disabled={page === 1} onClick={() => onChange(page - 1)} aria-label="前のページ"><ChevronLeft /></button>
+    {numbers.map((n, i) => <span key={n} className="pager-item">{i > 0 && n - numbers[i - 1] > 1 && <span className="pager-gap">…</span>}<button className={n === page ? 'active' : ''} aria-current={n === page ? 'page' : undefined} onClick={() => onChange(n)}>{n}</button></span>)}
+    <button disabled={page === pageCount} onClick={() => onChange(page + 1)} aria-label="次のページ"><ChevronRight /></button>
+  </nav>
+}
 
 export default App

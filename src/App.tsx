@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, LogOut, RefreshCw, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
-import { COVER_FOLDER_ID, COVER_FOLDER_URL, coverSources, driveFileUrl, normalizeCover } from './cover'
+import { COVER_FOLDER_ID, COVER_FOLDER_URL, coverSources, driveFileId, driveFileUrl, normalizeCover } from './cover'
 import { categories, sampleBooks } from './data'
 import { DATA_FOLDER_URL, DRIVE_API_KEY, DRIVE_CLIENT_ID, DRIVE_FILE_NAME, pickImage, readClipboardImage, uploadCoverImage } from './drive'
 import { useDriveSync, type SyncStatus } from './useDriveSync'
@@ -30,6 +30,24 @@ function normalizeMonth(value: string): string | null {
   const m = text.match(/^(\d{4})\s*[-/.年]?\s*(\d{1,2})\s*月?$/)
   const month = m ? Number(m[2]) : 0
   return m && month >= 1 && month <= 12 ? `${m[1]}-${String(month).padStart(2, '0')}` : null
+}
+// 同じ本かどうかの判定用に、全角半角・大文字小文字・空白の違いをそろえる
+const bookKey = (text: string) => text.normalize('NFKC').toLowerCase().replace(/\s+/g, '')
+// リンクの比較用。DriveのファイルはファイルIDでそろえ、それ以外は末尾の / などの違いを無視する
+const linkKey = (url: string) => { const text = url.trim(); return text && (driveFileId(text) ?? text.replace(/[/#?]+$/, '').toLowerCase()) }
+/**
+ * 同じ本がすでに登録されていれば、その本と理由を返す。
+ * タイトルが同じで著者が同じか片方が未登録、または関連リンクに同じURLがあれば同じ本とみなす
+ */
+function findDuplicate(books: Book[], book: Pick<Book, 'id' | 'title' | 'author' | 'links'>): { book: Book; reason: 'title' | 'url' } | undefined {
+  const title = bookKey(book.title), author = bookKey(book.author)
+  if (title) {
+    const same = books.find(b => b.id !== book.id && bookKey(b.title) === title && (!author || !bookKey(b.author) || bookKey(b.author) === author))
+    if (same) return { book: same, reason: 'title' }
+  }
+  const urls = new Set(book.links.map(l => linkKey(l.url)).filter(Boolean))
+  const same = urls.size ? books.find(b => b.id !== book.id && b.links.some(l => urls.has(linkKey(l.url)))) : undefined
+  return same && { book: same, reason: 'url' }
 }
 const emptyBook = (): Book => ({ id: crypto.randomUUID(), title: '', author: '', categoryId: lastCategory(), cover: '', baseMonth: lastBaseMonth(), status: '未読', memo: '', links: [], updatedAt: new Date().toISOString() })
 
@@ -91,7 +109,9 @@ function App() {
           const headers = splitCsv(lines.shift() || '')
           const next = lines.map(line => { const row = splitCsv(line); const get = (name: string) => row[headers.indexOf(name)] || ''; const cat = categories.find(c => c.name === get('分類'))
             return { ...emptyBook(), title: get('タイトル'), author: get('著者'), categoryId: cat?.id || 'd1', baseMonth: get('基準月'), status: (['未読', '読書中', '読了'].includes(get('読書状況')) ? get('読書状況') : '未読') as ReadingStatus, memo: get('要約') || get('メモ'), cover: get('表紙画像URL'), links: parseCsvLinks(get('関連リンク')) } })
-          saveBooks([...books, ...next]); setBackupOpen(false)
+          const added = next.reduce<Book[]>((list, b) => findDuplicate(list, b) ? list : [...list, b], books).slice(books.length)
+          if (added.length < next.length) alert(`登録済みの本と同じ ${next.length - added.length} 件は追加しませんでした。`)
+          saveBooks([...books, ...added]); setBackupOpen(false)
         }
       } catch { alert('ファイルを読み込めませんでした。形式をご確認ください。') }
     }; reader.readAsText(file)
@@ -123,7 +143,7 @@ function App() {
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
-    {editing && <BookModal book={editing} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={book => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
+    {editing && <BookModal book={editing} books={books} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={book => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>
@@ -176,7 +196,7 @@ function Empty({ onAdd, hasBooks }: { onAdd: () => void; hasBooks: boolean }) { 
 const canPickCover = Boolean(DRIVE_CLIENT_ID && DRIVE_API_KEY)
 const canPasteCover = Boolean(DRIVE_CLIENT_ID)
 
-function BookModal({ book, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; monthOptions: string[]; onClose: () => void; onSave: (b: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
+function BookModal({ book, books, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; books: Book[]; monthOptions: string[]; onClose: () => void; onSave: (b: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
   const isNew = !book.title
   const [draft, setDraft] = useState<Book>({ ...book, links: withPresetRows(book.links) })
   const update = <K extends keyof Book>(key: K, value: Book[K]) => setDraft(d => ({ ...d, [key]: value }))
@@ -206,9 +226,10 @@ function BookModal({ book, monthOptions, onClose, onSave, onDelete, onZoom }: { 
     if (image) { e.preventDefault(); void pasteCover(image) }
   }
   const finalize = (b: Book): Book => ({ ...b, title: b.title.trim(), links: cleanLinks(b.links), updatedAt: new Date().toISOString() })
+  const duplicate = findDuplicate(books, draft)
   const [monthError, setMonthError] = useState(false)
   const fixMonth = () => { const month = normalizeMonth(draft.baseMonth); setMonthError(month === null); if (month !== null) update('baseMonth', month); return month }
-  const submit = (e: React.FormEvent) => { e.preventDefault(); if (!draft.title.trim()) return; const baseMonth = fixMonth(); if (baseMonth === null) return; onSave(finalize({ ...draft, baseMonth })) }
+  const submit = (e: React.FormEvent) => { e.preventDefault(); if (!draft.title.trim() || duplicate) return; const baseMonth = fixMonth(); if (baseMonth === null) return; onSave(finalize({ ...draft, baseMonth })) }
   // 外側のクリックや×で閉じるときは、今の内容を保存してから閉じる（表紙のアップロード中なら完了を待つ）
   const saveAndClose = async () => {
     if (closingRef.current) return
@@ -217,6 +238,7 @@ function BookModal({ book, monthOptions, onClose, onSave, onDelete, onZoom }: { 
     if (uploadRef.current) { const id = await uploadRef.current.catch(() => null); if (id) current = { ...current, cover: id } }
     const same = (a: Book, b: Book) => JSON.stringify({ ...finalize(a), updatedAt: '' }) === JSON.stringify({ ...finalize(b), updatedAt: '' })
     if (!current.title.trim() || same(current, book)) onClose()
+    else if (findDuplicate(books, current)) { closingRef.current = false; alert('同じ本（タイトルまたは関連リンクのURLが同じ本）がすでに登録されているため保存できません。内容を変えるか、キャンセルで閉じてください。') }
     else onSave(finalize(current))
   }
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) void saveAndClose() }}><section className="modal" onPaste={onPaste}><div className="modal-head"><div><p className="eyebrow">{isNew ? 'NEW BOOK' : 'BOOK DETAILS'}</p><h2>{isNew ? '本を追加' : '本の詳細・編集'}</h2></div><button className="icon-btn" onClick={() => void saveAndClose()} title="保存して閉じる"><X /></button></div><form onSubmit={submit}>
@@ -225,9 +247,9 @@ function BookModal({ book, monthOptions, onClose, onSave, onDelete, onZoom }: { 
       : <div className="cover-placeholder"><BookOpen /><span>{draft.cover ? '表示できません' : '表紙プレビュー'}</span></div>} /><div className="cover-fields"><label>表紙（DriveのファイルID）<input value={draft.cover} onChange={e => update('cover', normalizeCover(e.target.value))} placeholder="ファイルID・共有リンク・画像URL" /></label>
       <div className="cover-actions">{canPasteCover && <button type="button" className="secondary-btn" onClick={() => void pasteCover()} disabled={uploading}>{uploading ? <LoaderCircle className="spin" /> : <ClipboardPaste />} {uploading ? 'アップロード中…' : '画像を貼り付け'}</button>}{canPickCover && <button type="button" className="secondary-btn" onClick={pickCover}><FolderOpen /> Driveから選ぶ</button>}<a href={driveFileUrl(draft.cover) ?? COVER_FOLDER_URL} target="_blank" rel="noreferrer"><ExternalLink />{driveFileUrl(draft.cover) ? 'Driveで開く' : '表紙フォルダを開く'}</a></div>
       <small className="cover-hint">{canPasteCover && 'コピーした画像は、表紙フォルダに「タイトル名」のファイルとして保存されます（Ctrl+Vでも可）。'}表紙フォルダの画像はファイルIDで保存します。共有リンクを貼るとIDに変換されます。表示するには、フォルダの共有設定を「リンクを知っている全員」にしてください。</small></div></div>
-    <div className="fields"><label>タイトル <em>必須</em><input required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" /></label><label>著者<input value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" /></label><div className="field-row"><label>分類<select value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select></label><label>基準月<input className={monthError ? 'invalid' : undefined} list="base-month-options" inputMode="numeric" autoComplete="off" placeholder="YYYY-MM（空欄可）" value={draft.baseMonth} onChange={e => { update('baseMonth', e.target.value); setMonthError(false) }} onBlur={fixMonth} />{monthError && <small className="field-error">YYYY-MM の形式で入力してください（例：2026-09）</small>}<datalist id="base-month-options">{monthOptions.map(m => <option key={m} value={m} />)}</datalist></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約<textarea rows={4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder="本の要約" /></label></div></div>
-    <div className="links-section"><div className="section-title"><div><h3>関連リンク</h3><p>表示名は候補から選ぶか入力します。左端の <GripVertical className="inline-icon" /> をドラッグして並べ替えられます。URLが空の欄は保存されません。</p></div><button type="button" className="secondary-btn" onClick={addLink}><Plus /> リンクを追加</button></div><LinkEditor links={draft.links} onChange={links => update('links', links)} /></div>
-    <div className="modal-actions">{!isNew && <button type="button" className="danger-btn" onClick={() => onDelete(draft.id)}><Trash2 /> 削除</button>}<span /><button type="button" className="ghost-btn" onClick={onClose}>キャンセル</button><button className="primary-btn">{isNew ? '本を登録する' : '変更を保存'}</button></div>
+    <div className="fields"><label>タイトル <em>必須</em><input className={duplicate ? 'invalid' : undefined} required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" />{duplicate && <small className="field-error">{duplicate.reason === 'url' ? '同じURLの関連リンクを持つ本' : '同じ本'}がすでに登録されています（{duplicate.book.title}{duplicate.book.author && ` / ${duplicate.book.author}`}）</small>}</label><label>著者<input value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" /></label><div className="field-row"><label>分類<select value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select></label><label>基準月<input className={monthError ? 'invalid' : undefined} list="base-month-options" inputMode="numeric" autoComplete="off" placeholder="YYYY-MM（空欄可）" value={draft.baseMonth} onChange={e => { update('baseMonth', e.target.value); setMonthError(false) }} onBlur={fixMonth} />{monthError && <small className="field-error">YYYY-MM の形式で入力してください（例：2026-09）</small>}<datalist id="base-month-options">{monthOptions.map(m => <option key={m} value={m} />)}</datalist></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約<textarea rows={4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder="本の要約" /></label></div></div>
+    <div className="links-section"><div className="section-title"><div><h3>関連リンク</h3><p>表示名は候補から選ぶか入力します。左端の <GripVertical className="inline-icon" /> をドラッグして並べ替えられます。URLが空の欄は保存されません。</p>{duplicate?.reason === 'url' && <p className="field-error">同じURLのリンクが「{duplicate.book.title}」に登録されています</p>}</div><button type="button" className="secondary-btn" onClick={addLink}><Plus /> リンクを追加</button></div><LinkEditor links={draft.links} onChange={links => update('links', links)} /></div>
+    <div className="modal-actions">{!isNew && <button type="button" className="danger-btn" onClick={() => onDelete(draft.id)}><Trash2 /> 削除</button>}<span /><button type="button" className="ghost-btn" onClick={onClose}>キャンセル</button><button className="primary-btn" disabled={Boolean(duplicate)}>{isNew ? '本を登録する' : '変更を保存'}</button></div>
   </form></section></div>
 }
 

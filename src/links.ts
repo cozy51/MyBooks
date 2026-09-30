@@ -18,3 +18,11 @@ export function cleanLinks(links: BookLink[]): BookLink[] {
   return links.map(l => ({ id: l.id, label: l.label.trim(), url: l.url.trim() })).filter(l => l.url)
 }
 
+
+/** クリップボードのテキストからURLを取り出す（読めないときは貼り付け用の入力欄を出す）。URLが無ければ空文字 */
+export async function readClipboardUrl(): Promise<string> {
+  let text: string | null = null
+  try { if (navigator.clipboard?.readText) text = await navigator.clipboard.readText() } catch { /* 権限拒否など */ }
+  text ??= window.prompt('クリップボードを読み取れませんでした。URLを貼り付けてください') ?? ''
+  return text.match(/https?:\/\/[^\s"'<>]+/)?.[0] ?? ''
+}

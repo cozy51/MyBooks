@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { ChartPie, ClipboardPaste, ExternalLink, GripVertical, Headphones, Link2, Presentation, ScanLine, Trash2, Video } from 'lucide-react'
-import { CARD_LINK_LIMIT, LINK_PRESETS, readClipboardUrl } from './links'
+import { CARD_LINK_LIMIT, LINK_PRESETS, isUrl, readClipboardUrl, sanitizeUrlInput } from './links'
 import type { BookLink } from './types'
 
 const ICONS: Record<string, typeof Link2> = { 'インフォグラフィック': ChartPie, '音声解説': Headphones, '動画解説': Video, '全ページスキャン': ScanLine, 'GeminiNotebookスライド': Presentation }
@@ -22,6 +22,9 @@ export function LinkEditor({ links, onChange }: { links: BookLink[]; onChange: (
     const next = [...links]; const [item] = next.splice(from, 1); next.splice(to, 0, item); onChange(next)
   }
   const update = (id: string, patch: Partial<BookLink>) => onChange(links.map(l => l.id === id ? { ...l, ...patch } : l))
+  // URL以外（日本語など）は入力させない。打ちかけの「https:」などは、欄を離れたときに消す
+  const typeUrl = (id: string, value: string) => { const url = sanitizeUrlInput(value); if (url !== null) update(id, { url }) }
+  const leaveUrl = (link: BookLink) => { if (link.url && !isUrl(link.url)) update(link.id, { url: '' }) }
   const pasteUrl = async (id: string) => {
     const url = await readClipboardUrl()
     if (url) update(id, { url }); else alert('クリップボードにURLがありません')
@@ -46,9 +49,9 @@ export function LinkEditor({ links, onChange }: { links: BookLink[]; onChange: (
         <button type="button" className="drag-handle" aria-label={`「${link.label || 'リンク'}」を並べ替え（ドラッグ、または↑↓キー）`} title="ドラッグして並べ替え"
           onPointerDown={startDrag(link.id)} onPointerMove={dragOver} onPointerUp={endDrag} onPointerCancel={endDrag} onKeyDown={keyMove(link.id, index)}><GripVertical /></button>
         <input list="link-label-options" value={link.label} onChange={e => update(link.id, { label: e.target.value })} placeholder="表示名（候補から選択・入力）" />
-        <span className="url-field"><input type="url" value={link.url} onChange={e => update(link.id, { url: e.target.value })} placeholder="https://..." />
+        <span className="url-field"><input type="url" inputMode="url" autoComplete="off" spellCheck={false} value={link.url} onChange={e => typeUrl(link.id, e.target.value)} onBlur={() => leaveUrl(link)} placeholder="https://..." />
           <button type="button" className="url-paste" onClick={() => void pasteUrl(link.id)} aria-label="クリップボードのURLを貼り付け" title="クリップボードのURLを貼り付け"><ClipboardPaste /></button></span>
-        {link.url ? <a href={link.url} target="_blank" rel="noreferrer" aria-label="新しいタブで開く"><ExternalLink /></a> : <span />}
+        {isUrl(link.url) ? <a href={link.url} target="_blank" rel="noreferrer" aria-label="新しいタブで開く"><ExternalLink /></a> : <span />}
         <button type="button" className="link-delete" onClick={() => onChange(links.filter(l => l.id !== link.id))} aria-label="リンクを削除"><Trash2 /></button>
       </div>)}
   </>

@@ -13,9 +13,22 @@ export function withPresetRows(links: BookLink[]): BookLink[] {
   return [...links.map(l => ({ ...l })), ...LINK_PRESETS.filter(p => !labels.has(p)).map(newLink)]
 }
 
-/** 保存用：URLが空の欄を取り除く */
+// URLに使える文字（半角英数字と記号）だけを対象にする。日本語や空白はURLの外とみなす
+const URL_PATTERN = /https?:\/\/[\w\-.~:/?#[\]@!$&()*+,;=%]+/i
+/** http(s):// で始まり、URLに使える文字だけでできているか */
+export const isUrl = (text: string) => new RegExp(`^${URL_PATTERN.source}$`, 'i').test(text)
+
+/** URL欄の入力を整える。URL以外の文字が混ざる入力は受け付けず null を返す。
+ *  「htt」のような http(s):// の打ちかけは許し、文章ごと貼り付けたときはURL部分だけを取り出す */
+export function sanitizeUrlInput(value: string): string | null {
+  const v = value.trim()
+  if (!v || isUrl(v) || 'https://'.startsWith(v.toLowerCase()) || 'http://'.startsWith(v.toLowerCase())) return v
+  return v.match(URL_PATTERN)?.[0] ?? null
+}
+
+/** 保存用：URLが空・URLとして正しくない欄を取り除く */
 export function cleanLinks(links: BookLink[]): BookLink[] {
-  return links.map(l => ({ id: l.id, label: l.label.trim(), url: l.url.trim() })).filter(l => l.url)
+  return links.map(l => ({ id: l.id, label: l.label.trim(), url: l.url.trim() })).filter(l => isUrl(l.url))
 }
 
 
@@ -24,5 +37,5 @@ export async function readClipboardUrl(): Promise<string> {
   let text: string | null = null
   try { if (navigator.clipboard?.readText) text = await navigator.clipboard.readText() } catch { /* 権限拒否など */ }
   text ??= window.prompt('クリップボードを読み取れませんでした。URLを貼り付けてください') ?? ''
-  return text.match(/https?:\/\/[^\s"'<>]+/)?.[0] ?? ''
+  return text.match(URL_PATTERN)?.[0] ?? ''
 }

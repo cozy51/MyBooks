@@ -1,6 +1,7 @@
 // 表紙画像から、タイトル・著者・分類を読み取る API（Vercel Function）。
 // 画像を読めるAI（Gemini / OpenAI）に表紙を渡し、JSONで答えてもらう。
-//   VISION_MODEL … モデル名を変えるときだけ設定（既定: gemini-2.5-flash / gpt-4.1-mini）
+//   VISION_MODEL … モデル名を変えるときだけ設定（既定: gemini-flash-latest / gpt-4.1-mini）
+// Geminiはモデルの提供終了・利用制限が早いため、見つからない（404）ときは候補を順に試す。
 // リクエスト: { image?: base64, mimeType?: string, cover?: DriveのファイルIDまたは画像URL, categories: { id, name }[] }
 import { authorized, notConfigured, provider, reply, unauthorized, upstreamFailure, UpstreamError, type Provider } from './_lib.js'
 
@@ -17,15 +18,26 @@ const instructions = (categories: Category[]) => `これは本の表紙の画像
 ${categories.map(c => `  ${c.id}: ${c.name}`).join('\n')}
 表紙が読み取れない場合は title を空文字にしてください。推測で文字を補わないでください。`
 
+/** 試すGeminiのモデル（指定があればそれを先に。gemini-flash-latest は常に最新のFlashを指す） */
+const geminiModels = () => [...new Set([process.env.VISION_MODEL?.trim(), 'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-3.5-flash'].filter((m): m is string => Boolean(m)))]
+
 async function askGemini(p: Provider, image: string, mimeType: string, categories: Category[]): Promise<CoverInfo> {
-  const model = process.env.VISION_MODEL?.trim() || 'gemini-2.5-flash'
+  for (const model of geminiModels()) {
+    try { return await askGeminiModel(p, model, image, mimeType, categories) } catch (e) {
+      if (!(e instanceof UpstreamError && e.status === 404)) throw e
+      console.warn(`vision model ${model} is not available`)
+    }
+  }
+  throw new UpstreamError(404, 'no available vision model')
+}
+
+async function askGeminiModel(p: Provider, model: string, image: string, mimeType: string, categories: Category[]): Promise<CoverInfo> {
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': p.key },
     body: JSON.stringify({
       contents: [{ parts: [{ inline_data: { mime_type: mimeType, data: image } }, { text: instructions(categories) }] }],
       generationConfig: {
-        temperature: 0,
         responseMimeType: 'application/json',
         responseSchema: { type: 'OBJECT', properties: { title: { type: 'STRING' }, author: { type: 'STRING' }, categoryId: { type: 'STRING', enum: categories.map(c => c.id) } }, required: ['title', 'author', 'categoryId'] },
       },
@@ -97,5 +109,8 @@ export async function POST(request: Request): Promise<Response> {
     const text = (v: unknown) => typeof v === 'string' ? v.trim().slice(0, 300) : ''
     const categoryId = categories.some(c => c.id === info.categoryId) ? info.categoryId : ''
     return reply(200, { title: text(info.title), author: text(info.author), categoryId })
-  } catch (e) { return upstreamFailure(e, '表紙の読み取り') }
+  } catch (e) {
+    if (e instanceof UpstreamError && e.status === 404) return reply(502, { error: '表紙の読み取りに使うAIモデルが見つかりませんでした。環境変数 VISION_MODEL に利用できるモデル名（例: gemini-flash-latest）を設定してください。', code: 'model_unavailable' })
+    return upstreamFailure(e, '表紙の読み取り')
+  }
 }

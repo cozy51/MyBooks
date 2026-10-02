@@ -24,10 +24,15 @@ export async function readCoverInfo(source: { image: Blob } | { cover: string })
   const payload = 'image' in source ? await shrink(source.image) : { cover: source.cover }
   let res: Response
   try {
-    res = await fetch('/api/cover-info', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ ...payload, categories: choices }) })
-  } catch { throw new Error('表紙を読み取るAPIに接続できませんでした。ネットワークを確認してください。') }
+    // サーバーは50秒で打ち切って応答するが、通信が切れた場合にも待ち続けないよう65秒で止める
+    res = await fetch('/api/cover-info', { signal: AbortSignal.timeout(65_000), method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ ...payload, categories: choices }) })
+  } catch (e) {
+    if (e instanceof Error && e.name === 'TimeoutError') throw new Error('表紙の読み取りが時間内に終わりませんでした。もう一度お試しください。', { cause: e })
+    throw new Error('表紙を読み取るAPIに接続できませんでした。ネットワークを確認してください。', { cause: e })
+  }
   const data = await res.json().catch(() => null) as (Partial<CoverInfo> & { error?: string }) | null
   if (res.status === 404 && !data) throw new Error('表紙を読み取るAPI（/api/cover-info）が見つかりません。Vercelへのデプロイ、または npm run dev で起動してください。')
+  if (res.status === 504 && !data) throw new Error('表紙の読み取りが時間内に終わりませんでした。もう一度お試しください。')
   if (!res.ok || !data) throw new Error(data?.error || `表紙を読み取れませんでした（${res.status}）`)
   return { title: data.title ?? '', author: data.author ?? '', categoryId: data.categoryId ?? '' }
 }

@@ -226,3 +226,29 @@ export async function readClipboardImage(): Promise<Blob | null> {
   }
   return null
 }
+
+// 本棚データ以外のJSONファイル（分類マップのキャッシュなど）を保存先フォルダに読み書きする。
+// 本棚データの MyBooks-library.json とは別ファイルなので、こちらの失敗が本棚の保存に影響することはない。
+
+/** 保存先フォルダ内の指定名のファイル（複数ある場合は最初に作られたもの） */
+export async function findNamedFile(token: string, name: string): Promise<DriveFile | null> {
+  const q = encodeURIComponent(`'${DATA_FOLDER_ID}' in parents and name='${name}' and trashed=false`)
+  const res = await call(token, `${API}?q=${q}&spaces=drive&orderBy=createdTime&pageSize=1&fields=files(id,modifiedTime)`)
+  return (await json<{ files: DriveFile[] }>(res)).files[0] ?? null
+}
+
+export async function readJsonFile<T>(token: string, id: string): Promise<T> {
+  return json<T>(await call(token, `${API}/${id}?alt=media`))
+}
+
+/** JSONを保存する。id があれば上書き、なければ保存先フォルダに新規作成 */
+export async function writeJsonFile(token: string, name: string, data: unknown, id?: string): Promise<DriveFile> {
+  const text = JSON.stringify(data)
+  if (id) return json(await call(token, `${UPLOAD}/${id}?uploadType=media&fields=id,modifiedTime`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: text }))
+  const form = new FormData()
+  form.append('metadata', new Blob([JSON.stringify({ name, mimeType: 'application/json', parents: [DATA_FOLDER_ID] })], { type: 'application/json' }))
+  form.append('file', new Blob([text], { type: 'application/json' }))
+  const res = await call(token, `${UPLOAD}?uploadType=multipart&fields=id,modifiedTime`, { method: 'POST', body: form })
+  if (res.status === 403 || res.status === 404) throw new FolderAccessError('保存先のMyBooksフォルダへのアクセスが許可されていません')
+  return json(res)
+}

@@ -1,16 +1,19 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, LogOut, RefreshCw, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
-import { COVER_FOLDER_ID, COVER_FOLDER_URL, coverSources, driveFileId, driveFileUrl, normalizeCover } from './cover'
-import { categories, sampleBooks } from './data'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
+import { COVER_FOLDER_ID, COVER_FOLDER_URL, driveFileId, driveFileUrl, normalizeCover } from './cover'
+import { categories, sampleBooks, statusClass } from './data'
+import { CoverImage, type Zoom } from './CoverImage'
 import { DATA_FOLDER_URL, DRIVE_API_KEY, DRIVE_CLIENT_ID, DRIVE_FILE_NAME, pickImage, readClipboardImage, uploadCoverImage } from './drive'
 import { useDriveSync, type SyncStatus } from './useDriveSync'
 import { CardLinks, LinkEditor } from './LinkEditor'
 import { cleanLinks, newLink, withPresetRows } from './links'
 import type { Book, BookLink, ReadingStatus } from './types'
 
+// 分類マップ（UMAPなど）は「マップ」を開いたときだけ読み込む
+const BookMap = lazy(() => import('./BookMap'))
+
 const STORE = 'mybooks-library-v1'
 const PAGE_SIZE = 100
-const statusClass: Record<ReadingStatus, string> = { '未読': 'unread', '読書中': 'reading', '読了': 'done' }
 const LAST_CATEGORY = 'mybooks-last-category'
 /** 前回保存した本の分類（新しい本の初期値に使う） */
 function lastCategory() {
@@ -63,7 +66,7 @@ function App() {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('all')
   const [status, setStatus] = useState('all')
-  const [view, setView] = useState<'cards' | 'table'>('cards')
+  const [view, setView] = useState<'cards' | 'table' | 'map'>('cards')
   const [editing, setEditing] = useState<Book | null>(null)
   const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null)
   const [backupOpen, setBackupOpen] = useState(false)
@@ -90,6 +93,8 @@ function App() {
   const pageStart = (page - 1) * PAGE_SIZE
   const pageBooks = useMemo(() => filtered.slice(pageStart, pageStart + PAGE_SIZE), [filtered, pageStart])
   const headingRef = useRef<HTMLDivElement>(null)
+  const filteredIds = useMemo(() => new Set(filtered.map(b => b.id)), [filtered])
+  const paged = view !== 'map' && pageCount > 1
   const goPage = (next: number) => { setPaging({ key: filterKey, page: next }); headingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 
   const exportJson = () => {
@@ -133,13 +138,15 @@ function App() {
         <select value={status} onChange={e => setStatus(e.target.value)} aria-label="読書状況で絞り込み"><option value="all">すべての読書状況</option><option>未読</option><option>読書中</option><option>読了</option></select>
       </section>
 
-      <div className="content-heading" ref={headingRef}><div><h2>すべての本</h2><span>{pageCount > 1 ? `${filtered.length}冊中 ${pageStart + 1}〜${pageStart + pageBooks.length}冊を表示` : `${filtered.length}冊を表示`}</span></div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button></div></div>
+      <div className="content-heading" ref={headingRef}><div><h2>すべての本</h2><span>{paged ? `${filtered.length}冊中 ${pageStart + 1}〜${pageStart + pageBooks.length}冊を表示` : `${filtered.length}冊を表示`}</span></div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}><MapIcon /> マップ</button></div></div>
 
-      {pageCount > 1 && <Pager page={page} pageCount={pageCount} onChange={goPage} />}
-      {filtered.length === 0 ? <Empty onAdd={() => setEditing(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
+      {paged && <Pager page={page} pageCount={pageCount} onChange={goPage} />}
+      {view === 'map' && books.length > 0 ? <Suspense fallback={<div className="book-map panel map-loading"><LoaderCircle className="spin" /> マップを準備しています…</div>}>
+        <BookMap books={books} visibleIds={filteredIds} category={category} onCategory={setCategory} onSelect={setEditing} driveStatus={drive.status} onConnect={() => void drive.connect()} />
+      </Suspense> : filtered.length === 0 ? <Empty onAdd={() => setEditing(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
         <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} onClick={() => setEditing(book)} onZoom={setZoomed} />)}</div> :
         <BookTable books={pageBooks} startNo={pageStart + 1} onSelect={setEditing} />}
-      {pageCount > 1 && <Pager className="pager-bottom" page={page} pageCount={pageCount} onChange={goPage} />}
+      {paged && <Pager className="pager-bottom" page={page} pageCount={pageCount} onChange={goPage} />}
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
@@ -147,18 +154,6 @@ function App() {
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>
-}
-
-type Zoom = { src: string; alt: string }
-
-function CoverImage({ src, alt, fallback, width, onZoom }: { src: string; alt: string; fallback: ReactNode; width?: number; onZoom?: (z: Zoom) => void }) {
-  const sources = useMemo(() => coverSources(src, width), [src, width])
-  const [failed, setFailed] = useState({ src, count: 0 })
-  const count = failed.src === src ? failed.count : 0
-  if (count >= sources.length) return <>{fallback}</>
-  const zoom = onZoom && ((e: React.SyntheticEvent) => { e.stopPropagation(); onZoom({ src, alt }) })
-  return <img src={sources[count]} alt={alt} referrerPolicy="no-referrer" loading="lazy" onError={() => setFailed({ src, count: count + 1 })}
-    className={zoom ? 'zoomable' : undefined} title={zoom ? 'クリックで拡大' : undefined} onClick={zoom} />
 }
 
 function CoverLightbox({ src, alt, onClose }: Zoom & { onClose: () => void }) {

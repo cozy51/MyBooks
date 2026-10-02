@@ -288,9 +288,8 @@ function BookModal({ book, books, summaryJob, onSummarize, onSummaryApplied, tab
       if (!title) {
         setReading(true)
         const info = await readCoverInfo({ image }).catch(() => null).finally(() => setReading(false))
-        title = info?.title ?? ''
-        if (!title) return alert('表紙からタイトルを読み取れませんでした。先にタイトルを入力してください（表紙画像のファイル名に使います）')
-        applyCoverInfo(info!)
+        if (!info?.title) return alert('表紙からタイトルを読み取れませんでした。先にタイトルを入力してください（表紙画像のファイル名に使います）')
+        title = applyCoverInfo(info)
       }
       setUploading(true)
       uploadRef.current = uploadCoverImage(image, title, COVER_FOLDER_ID)
@@ -302,11 +301,16 @@ function BookModal({ book, books, summaryJob, onSummarize, onSummaryApplied, tab
   const [reading, setReading] = useState(false)
   const elapsed = useElapsed(reading)
   const [readNote, setReadNote] = useState('')
-  const applyCoverInfo = (info: CoverInfo) => {
+  /** 読み取った内容を入力し、入力したタイトルを返す */
+  const applyCoverInfo = (info: CoverInfo): string => {
     const category = categories.find(c => c.id === info.categoryId && c.parent)
-    const read: Partial<Pick<Book, 'title' | 'author' | 'categoryId'>> = { ...(info.title && { title: info.title }), ...(info.author && { author: info.author }), ...(category && { categoryId: category.id }) }
+    // 同じタイトルの本がすでにあれば、前置きやサブタイトルも含めた詳しいタイトルにする
+    const sameTitle = (title: string) => findDuplicate(books, { ...draft, title, author: info.author || draft.author })?.reason === 'title'
+    const detailed = Boolean(info.title && info.fullTitle && info.fullTitle !== info.title && sameTitle(info.title) && !sameTitle(info.fullTitle))
+    const title = detailed ? info.fullTitle : info.title
+    const read: Partial<Pick<Book, 'title' | 'author' | 'categoryId'>> = { ...(title && { title }), ...(info.author && { author: info.author }), ...(category && { categoryId: category.id }) }
     const keys = Object.keys(read) as (keyof typeof read)[]
-    if (!keys.length) { setReadNote('表紙から読み取れる文字がありませんでした。'); return }
+    if (!keys.length) { setReadNote('表紙から読み取れる文字がありませんでした。'); return draft.title }
     // 確認せずに入力し、変更した項目には変更前の値と「元に戻す」を表示する
     setDraft(d => ({ ...d, ...read }))
     const changed = keys.filter(key => read[key] !== draft[key].trim())
@@ -314,7 +318,8 @@ function BookModal({ book, books, summaryJob, onSummarize, onSummaryApplied, tab
     setFilled(new Map(keys.map(key => [key, { before: draft[key], changed: changed.includes(key), source: 'cover' }])))
     const missing = (['title', 'author', 'categoryId'] as const).filter(key => !read[key])
     const names = (list: readonly (keyof typeof read)[]) => list.map(key => FILL_LABEL[key]).join('・')
-    setReadNote([changed.length && `変更：${names(changed)}`, same.length && `変更なし：${names(same)}`, missing.length && `読み取れず：${names(missing)}`].filter(Boolean).join('／') + (changed.length ? '。変更した項目を確認してください。' : '。表紙の内容と一致しています。'))
+    setReadNote([changed.length && `変更：${names(changed)}`, same.length && `変更なし：${names(same)}`, missing.length && `読み取れず：${names(missing)}`].filter(Boolean).join('／') + (changed.length ? '。変更した項目を確認してください。' : '。表紙の内容と一致しています。') + (detailed ? `\n同じタイトルの本（${info.title}）がすでにあるため、詳しいタイトルにしました。` : ''))
+    return title || draft.title
   }
   const readCover = async () => {
     if (reading || uploading) return

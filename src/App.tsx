@@ -251,7 +251,8 @@ function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onS
     const image = canPasteCover ? Array.from(e.clipboardData.files).find(f => f.type.startsWith('image/')) : undefined
     if (image) { e.preventDefault(); void pasteCover(image) }
   }
-  const finalize = (b: Book): Book => ({ ...b, title: b.title.trim(), links: cleanLinks(b.links), updatedAt: new Date().toISOString() })
+  // 著者名の空白は半角1つにそろえる（全角スペースや連続した空白を直す。例: 田坂 広志）
+  const finalize = (b: Book): Book => ({ ...b, title: b.title.trim(), author: b.author.replace(/[\s\u3000]+/g, ' ').trim(), links: cleanLinks(b.links), updatedAt: new Date().toISOString() })
   const duplicate = findDuplicate(books, draft)
   const [monthError, setMonthError] = useState(false)
   const fixMonth = () => { const month = normalizeMonth(draft.baseMonth); setMonthError(month === null); if (month !== null) update('baseMonth', month); return month }

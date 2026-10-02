@@ -13,7 +13,7 @@ interface CoverInfo { title: string; author: string; categoryId: string }
 
 const instructions = (categories: Category[]) => `これは本の表紙の画像です。表紙に印刷された文字を読み取り、次の3つを答えてください。
 - title: 本の正式なタイトル。サブタイトルが明確にあれば「タイトル サブタイトル」のように続けてよい。帯やキャッチコピー、シリーズ名、出版社名は含めない。
-- author: 著者名だけ（「著」「編」「監修」「訳」などは付けない）。複数いる場合は「、」で区切る。読み取れなければ空文字。
+- author: 著者名だけ（「著」「編」「監修」「訳」などは付けない）。日本人の名前は姓と名の間に半角スペースを1つ入れる（例: 田坂 広志）。外国人の名前は表紙の表記のまま（例: ボリス・チェルニー）。複数いる場合は「、」で区切る。読み取れなければ空文字。
 - categoryId: 次の分類から、この本の内容に最も合うものの id を1つ。
 ${categories.map(c => `  ${c.id}: ${c.name}`).join('\n')}
 表紙が読み取れない場合は title を空文字にしてください。推測で文字を補わないでください。`
@@ -108,7 +108,9 @@ export async function POST(request: Request): Promise<Response> {
     const info = p.name === 'gemini' ? await askGemini(p, source.image, source.mimeType, categories) : await askOpenAI(p, source.image, source.mimeType, categories)
     const text = (v: unknown) => typeof v === 'string' ? v.trim().slice(0, 300) : ''
     const categoryId = categories.some(c => c.id === info.categoryId) ? info.categoryId : ''
-    return reply(200, { title: text(info.title), author: text(info.author), categoryId })
+    // 著者名の空白は半角1つにそろえる（全角スペース・連続した空白を直す）
+    const author = text(info.author).split(/[、,，]/).map(name => name.replace(/[\s\u3000]+/g, ' ').trim()).filter(Boolean).join('、')
+    return reply(200, { title: text(info.title), author, categoryId })
   } catch (e) {
     if (e instanceof UpstreamError && e.status === 404) return reply(502, { error: '表紙の読み取りに使うAIモデルが見つかりませんでした。環境変数 VISION_MODEL に利用できるモデル名（例: gemini-flash-latest）を設定してください。', code: 'model_unavailable' })
     return upstreamFailure(e, '表紙の読み取り')

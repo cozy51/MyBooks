@@ -82,7 +82,15 @@ const instructions = (title: string, author: string) => `これは本「${title}
 - 300〜400字程度の1段落の文章にする（見出し・箇条書き・記号による装飾は使わない）
 - 何についての本か（主題）、著者の主な主張、読者が得られる具体的な考え方や方法を中心にまとめる
 - 目次や奥付、広告ページの内容は含めない
-- 要約の文章だけを出力する`
+- 要約の文章だけを出力する（「（392字）」のような文字数の表記や、前置き・見出しは付けない）`
+
+/** AIが付けることがある文字数の表記（例: （392字）・(約400文字)・文字数：392字）や「要約：」の前置きを取り除く */
+export function cleanSummary(text: string): string {
+  return text.trim()
+    .replace(/^(?:要約|まとめ)\s*[:：]\s*/, '')
+    .replace(/\s*(?:[（(]\s*(?:約\s*)?[0-9０-９,，]+\s*(?:字|文字)\s*(?:程度)?\s*[）)]|(?:文字数|字数)\s*[:：]?\s*(?:約\s*)?[0-9０-９,，]+\s*(?:字|文字))\s*$/, '')
+    .trim()
+}
 
 async function summarize(deadline: number, p: Provider, file: { uri: string; mimeType: string }, title: string, author: string): Promise<string> {
   for (const model of geminiModels(process.env.SUMMARY_MODEL)) {
@@ -97,7 +105,7 @@ async function summarize(deadline: number, p: Provider, file: { uri: string; mim
       })
       if (res.ok) {
         const data = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
-        return data.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('').trim() ?? ''
+        return cleanSummary(data.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('') ?? '')
       }
       const detail = await res.text()
       if (thinking && res.status === 400 && /thinking/i.test(detail)) continue // thinkingLevel 未対応のモデル

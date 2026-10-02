@@ -13,7 +13,7 @@ interface CoverInfo { title: string; author: string; categoryId: string }
 
 const instructions = (categories: Category[]) => `これは本の表紙の画像です。表紙に印刷された文字を読み取り、次の3つを答えてください。
 - title: 本の正式なタイトル。サブタイトルが明確にあれば「タイトル サブタイトル」のように続けてよい。帯やキャッチコピー、シリーズ名、出版社名は含めない。
-- author: 著者名だけ（「著」「編」「監修」「訳」などは付けない）。複数いる場合は「、」で区切る。読み取れなければ空文字。
+- author: 著者名だけ（「著」「編」「監修」「訳」などは付けない）。日本人の名前は姓と名の間に半角スペースを1つ入れる（例: 田坂 広志）。外国人の名前は表紙の表記のまま（例: ボリス・チェルニー）。複数いる場合は「、」で区切る。読み取れなければ空文字。
 - categoryId: 次の分類から、この本の内容に最も合うものの id を1つ。
 ${categories.map(c => `  ${c.id}: ${c.name}`).join('\n')}
 表紙が読み取れない場合は title を空文字にしてください。推測で文字を補わないでください。`
@@ -21,9 +21,13 @@ ${categories.map(c => `  ${c.id}: ${c.name}`).join('\n')}
 /** 試すGeminiのモデル（指定があればそれを先に。gemini-flash-latest は常に最新のFlashを指す） */
 const geminiModels = () => [...new Set([process.env.VISION_MODEL?.trim(), 'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-3.5-flash'].filter((m): m is string => Boolean(m)))]
 
+/** 全体の制限時間（Vercelの実行上限60秒より短くし、必ず応答を返す） */
+const TIME_LIMIT = 50_000
+
 async function askGemini(p: Provider, image: string, mimeType: string, categories: Category[]): Promise<CoverInfo> {
+  const deadline = Date.now() + TIME_LIMIT
   for (const model of geminiModels()) {
-    try { return await askGeminiModel(p, model, image, mimeType, categories) } catch (e) {
+    try { return await askGeminiModel(p, model, image, mimeType, categories, deadline) } catch (e) {
       if (!(e instanceof UpstreamError && e.status === 404)) throw e
       console.warn(`vision model ${model} is not available`)
     }
@@ -31,26 +35,43 @@ async function askGemini(p: Provider, image: string, mimeType: string, categorie
   throw new UpstreamError(404, 'no available vision model')
 }
 
-async function askGeminiModel(p: Provider, model: string, image: string, mimeType: string, categories: Category[]): Promise<CoverInfo> {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+/** 制限時間つきの fetch（時間切れは 504 として扱う） */
+async function fetchBefore(deadline: number, url: string, init: RequestInit): Promise<Response> {
+  const remaining = deadline - Date.now()
+  if (remaining <= 1000) throw new UpstreamError(504, 'timeout')
+  try { return await fetch(url, { ...init, signal: AbortSignal.timeout(remaining) }) } catch (e) {
+    if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) throw new UpstreamError(504, 'timeout')
+    throw e
+  }
+}
+
+async function askGeminiModel(p: Provider, model: string, image: string, mimeType: string, categories: Category[], deadline: number, thinking = true): Promise<CoverInfo> {
+  const res = await fetchBefore(deadline, `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': p.key },
     body: JSON.stringify({
       contents: [{ parts: [{ inline_data: { mime_type: mimeType, data: image } }, { text: instructions(categories) }] }],
       generationConfig: {
+        // 文字を読み取るだけなので、考える時間（thinking）は短くして待ち時間を減らす
+        ...(thinking && { thinkingConfig: { thinkingLevel: 'low' } }),
         responseMimeType: 'application/json',
         responseSchema: { type: 'OBJECT', properties: { title: { type: 'STRING' }, author: { type: 'STRING' }, categoryId: { type: 'STRING', enum: categories.map(c => c.id) } }, required: ['title', 'author', 'categoryId'] },
       },
     }),
   })
-  if (!res.ok) throw new UpstreamError(res.status, await res.text())
+  if (!res.ok) {
+    const detail = await res.text()
+    // thinkingLevel に対応していないモデルでは、指定を外してもう一度
+    if (thinking && res.status === 400 && /thinking/i.test(detail)) return askGeminiModel(p, model, image, mimeType, categories, deadline, false)
+    throw new UpstreamError(res.status, detail)
+  }
   const data = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
   return JSON.parse(data.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('') || '{}')
 }
 
 async function askOpenAI(p: Provider, image: string, mimeType: string, categories: Category[]): Promise<CoverInfo> {
   const model = process.env.VISION_MODEL?.trim() || 'gpt-4.1-mini'
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  const res = await fetchBefore(Date.now() + TIME_LIMIT, 'https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.key}` },
     body: JSON.stringify({
@@ -73,7 +94,7 @@ async function fetchCover(cover: string): Promise<{ image: string; mimeType: str
     : /^https:\/\//.test(cover) ? [cover] : []
   for (const url of urls) {
     try {
-      const res = await fetch(url, { redirect: 'follow' })
+      const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(10_000) })
       const mimeType = res.headers.get('content-type')?.split(';')[0] ?? ''
       if (!res.ok || !mimeType.startsWith('image/')) continue
       const bytes = Buffer.from(await res.arrayBuffer())
@@ -108,8 +129,11 @@ export async function POST(request: Request): Promise<Response> {
     const info = p.name === 'gemini' ? await askGemini(p, source.image, source.mimeType, categories) : await askOpenAI(p, source.image, source.mimeType, categories)
     const text = (v: unknown) => typeof v === 'string' ? v.trim().slice(0, 300) : ''
     const categoryId = categories.some(c => c.id === info.categoryId) ? info.categoryId : ''
-    return reply(200, { title: text(info.title), author: text(info.author), categoryId })
+    // 著者名の空白は半角1つにそろえる（全角スペース・連続した空白を直す）
+    const author = text(info.author).split(/[、,，]/).map(name => name.replace(/[\s\u3000]+/g, ' ').trim()).filter(Boolean).join('、')
+    return reply(200, { title: text(info.title), author, categoryId })
   } catch (e) {
+    if (e instanceof UpstreamError && e.status === 504) return reply(504, { error: '表紙の読み取りが時間内に終わりませんでした。もう一度お試しください。', code: 'timeout' })
     if (e instanceof UpstreamError && e.status === 404) return reply(502, { error: '表紙の読み取りに使うAIモデルが見つかりませんでした。環境変数 VISION_MODEL に利用できるモデル名（例: gemini-flash-latest）を設定してください。', code: 'model_unavailable' })
     return upstreamFailure(e, '表紙の読み取り')
   }

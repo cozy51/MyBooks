@@ -197,11 +197,20 @@ const canPasteCover = Boolean(DRIVE_CLIENT_ID)
 
 type ModalTab = 'edit' | 'similar' | 'author'
 
+const FILL_LABEL = { title: 'タイトル', author: '著者', categoryId: '分類' } as const
+/** 分類の表示名（例: F-1: ビジネススキル・法律） */
+const categoryLabel = (id: string) => categories.find(c => c.id === id)?.name ?? id
+
 /** onSave の open: 保存したあとに続けて開く本（類似する本・同じ著者の本から選んだとき） */
 function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; books: Book[]; tab: ModalTab; onTab: (t: ModalTab) => void; onOpen: (b: Book) => void; monthOptions: string[]; onClose: () => void; onSave: (b: Book, open?: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
   const isNew = !book.title
   const [draft, setDraft] = useState<Book>({ ...book, links: withPresetRows(book.links) })
-  const update = <K extends keyof Book>(key: K, value: Book[K]) => setDraft(d => ({ ...d, [key]: value }))
+  // 表紙から読み取って入力した項目（手で直すと目印を外す）
+  const [filled, setFilled] = useState<ReadonlySet<keyof Book>>(new Set())
+  const update = <K extends keyof Book>(key: K, value: Book[K]) => {
+    setDraft(d => ({ ...d, [key]: value }))
+    setFilled(f => { if (!f.has(key)) return f; const next = new Set(f); next.delete(key); return next })
+  }
   const addLink = () => update('links', [...draft.links, newLink()])
   const pickCover = async () => {
     try { const id = await pickImage(COVER_FOLDER_ID); if (id) update('cover', id) } catch (e) { alert(e instanceof Error ? e.message : String(e)) }
@@ -232,14 +241,28 @@ function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onS
   }
   // 表紙から読み取ったタイトル・著者・分類を入力する（入力済みの内容と違うときは確認する）
   const [reading, setReading] = useState(false)
+  // 読み取り中の経過秒数（止まっていないことが分かるように表示する）
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    if (!reading) return
+    const started = Date.now()
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000)
+    return () => { clearInterval(timer); setElapsed(0) }
+  }, [reading])
   const [readNote, setReadNote] = useState('')
   const applyCoverInfo = (info: CoverInfo) => {
-    const changes = (['title', 'author'] as const).filter(key => info[key] && info[key] !== draft[key].trim())
-    const overwrite = changes.filter(key => draft[key].trim())
-    if (overwrite.length && !confirm(`表紙から読み取った内容で上書きしますか？\n\n${overwrite.map(key => `${key === 'title' ? 'タイトル' : '著者'}：${draft[key]} → ${info[key]}`).join('\n')}`)) return
     const category = categories.find(c => c.id === info.categoryId && c.parent)
-    setDraft(d => ({ ...d, ...Object.fromEntries(changes.map(key => [key, info[key]])), ...(category ? { categoryId: category.id } : {}) }))
-    setReadNote(changes.length || category ? '表紙から読み取って入力しました。内容を確認してください。' : '表紙から読み取れる文字がありませんでした。')
+    const read: Partial<Pick<Book, 'title' | 'author' | 'categoryId'>> = { ...(info.title && { title: info.title }), ...(info.author && { author: info.author }), ...(category && { categoryId: category.id }) }
+    const keys = Object.keys(read) as (keyof typeof read)[]
+    if (!keys.length) { setReadNote('表紙から読み取れる文字がありませんでした。'); return }
+    // 入力済みの内容と違うときは確認する（新しい本の分類は前回の分類が入っているだけなので確認しない）
+    const label = (key: keyof typeof read, value: string) => key === 'categoryId' ? categoryLabel(value) : value
+    const overwrite = keys.filter(key => draft[key].trim() && read[key] !== draft[key].trim() && !(key === 'categoryId' && isNew))
+    if (overwrite.length && !confirm(`表紙から読み取った内容で上書きしますか？\n\n${overwrite.map(key => `${FILL_LABEL[key]}：${label(key, draft[key])} → ${label(key, read[key]!)}`).join('\n')}`)) return
+    setDraft(d => ({ ...d, ...read }))
+    setFilled(new Set(keys))
+    const missing = (['title', 'author', 'categoryId'] as const).filter(key => !read[key])
+    setReadNote(`表紙から${keys.map(key => FILL_LABEL[key]).join('・')}を入力しました${missing.length ? `（${missing.map(key => FILL_LABEL[key]).join('・')}は読み取れませんでした）` : ''}。内容を確認してください。`)
   }
   const readCover = async () => {
     if (reading || uploading) return
@@ -247,11 +270,14 @@ function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onS
     setReading(true); setReadNote('')
     try { applyCoverInfo(await readCoverInfo({ cover: draft.cover })) } catch (e) { alert(e instanceof Error ? e.message : String(e)) } finally { setReading(false) }
   }
+  const fill = (key: keyof Book) => filled.has(key) ? 'autofilled' : undefined
+  const fillMark = (key: keyof Book) => filled.has(key) && <span className="fill-mark"><ScanText />表紙から</span>
   const onPaste = (e: React.ClipboardEvent) => {
     const image = canPasteCover ? Array.from(e.clipboardData.files).find(f => f.type.startsWith('image/')) : undefined
     if (image) { e.preventDefault(); void pasteCover(image) }
   }
-  const finalize = (b: Book): Book => ({ ...b, title: b.title.trim(), links: cleanLinks(b.links), updatedAt: new Date().toISOString() })
+  // 著者名の空白は半角1つにそろえる（全角スペースや連続した空白を直す。例: 田坂 広志）
+  const finalize = (b: Book): Book => ({ ...b, title: b.title.trim(), author: b.author.replace(/[\s\u3000]+/g, ' ').trim(), links: cleanLinks(b.links), updatedAt: new Date().toISOString() })
   const duplicate = findDuplicate(books, draft)
   const [monthError, setMonthError] = useState(false)
   const fixMonth = () => { const month = normalizeMonth(draft.baseMonth); setMonthError(month === null); if (month !== null) update('baseMonth', month); return month }
@@ -279,7 +305,7 @@ function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onS
       : <div className="cover-placeholder"><BookOpen /><span>{draft.cover ? '表示できません' : '表紙プレビュー'}</span></div>} /><div className="cover-fields"><label>表紙（DriveのファイルID）<input value={draft.cover} onChange={e => update('cover', normalizeCover(e.target.value))} placeholder="ファイルID・共有リンク・画像URL" /></label>
       <div className="cover-actions">{canPasteCover && <button type="button" className="secondary-btn" onClick={() => void pasteCover()} disabled={uploading}>{uploading ? <LoaderCircle className="spin" /> : <ClipboardPaste />} {uploading ? 'アップロード中…' : '画像を貼り付け'}</button>}{canPickCover && <button type="button" className="secondary-btn" onClick={pickCover}><FolderOpen /> Driveから選ぶ</button>}<a href={driveFileUrl(draft.cover) ?? COVER_FOLDER_URL} target="_blank" rel="noreferrer"><ExternalLink />{driveFileUrl(draft.cover) ? 'Driveで開く' : '表紙フォルダを開く'}</a></div>
       <small className="cover-hint">{canPasteCover && 'コピーした画像は、表紙フォルダに「タイトル名」のファイルとして保存されます（Ctrl+Vでも可）。'}表紙フォルダの画像はファイルIDで保存します。共有リンクを貼るとIDに変換されます。表示するには、フォルダの共有設定を「リンクを知っている全員」にしてください。</small></div></div>
-    <div className="fields"><label>タイトル <em>必須</em><input className={duplicate ? 'invalid' : undefined} required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" />{duplicate && <small className="field-error">{duplicate.reason === 'url' ? '同じURLの関連リンクを持つ本' : '同じ本'}がすでに登録されています（{duplicate.book.title}{duplicate.book.author && ` / ${duplicate.book.author}`}）</small>}</label><label>著者<span className="input-with-action"><input value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" /><button type="button" className="field-action" onClick={() => void readCover()} disabled={reading} title="表紙の画像から読み取り（タイトル・著者・分類を入力）" aria-label="表紙の画像からタイトル・著者・分類を読み取る">{reading ? <LoaderCircle className="spin" /> : <ScanText />}<span>表紙から入力</span></button></span>{readNote && <small className="field-note">{readNote}</small>}</label><div className="field-row"><label>分類<select value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select></label><label>基準月<input className={monthError ? 'invalid' : undefined} list="base-month-options" inputMode="numeric" autoComplete="off" placeholder="YYYY-MM（空欄可）" value={draft.baseMonth} onChange={e => { update('baseMonth', e.target.value); setMonthError(false) }} onBlur={fixMonth} />{monthError && <small className="field-error">YYYY-MM の形式で入力してください（例：2026-09）</small>}<datalist id="base-month-options">{monthOptions.map(m => <option key={m} value={m} />)}</datalist></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約<textarea rows={4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder="本の要約" /></label></div></div>
+    <div className="fields"><div className="autofill-bar"><button type="button" className="autofill-btn" onClick={() => void readCover()} disabled={reading} title="表紙の画像の文字を読み取り、タイトル・著者・分類を入力します">{reading ? <LoaderCircle className="spin" /> : <ScanText />}{reading ? `読み取り中…${elapsed ? ` ${elapsed}秒` : ''}` : '表紙から入力'}</button><span>タイトル・著者・分類を表紙の画像から読み取ります</span>{readNote && <small className="field-note">{readNote}</small>}</div><label>タイトル <em>必須</em>{fillMark('title')}<input className={duplicate ? 'invalid' : fill('title')} required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" />{duplicate && <small className="field-error">{duplicate.reason === 'url' ? '同じURLの関連リンクを持つ本' : '同じ本'}がすでに登録されています（{duplicate.book.title}{duplicate.book.author && ` / ${duplicate.book.author}`}）</small>}</label><label>著者{fillMark('author')}<input className={fill('author')} value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" /></label><div className="field-row"><label>分類{fillMark('categoryId')}<select className={fill('categoryId')} value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select></label><label>基準月<input className={monthError ? 'invalid' : undefined} list="base-month-options" inputMode="numeric" autoComplete="off" placeholder="YYYY-MM（空欄可）" value={draft.baseMonth} onChange={e => { update('baseMonth', e.target.value); setMonthError(false) }} onBlur={fixMonth} />{monthError && <small className="field-error">YYYY-MM の形式で入力してください（例：2026-09）</small>}<datalist id="base-month-options">{monthOptions.map(m => <option key={m} value={m} />)}</datalist></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約<textarea rows={4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder="本の要約" /></label></div></div>
     <div className="links-section"><div className="section-title"><div><h3>関連リンク</h3><p>表示名は候補から選ぶか入力します。左端の <GripVertical className="inline-icon" /> をドラッグして並べ替えられます。URLが空の欄は保存されません。</p>{duplicate?.reason === 'url' && <p className="field-error">同じURLのリンクが「{duplicate.book.title}」に登録されています</p>}</div><button type="button" className="secondary-btn" onClick={addLink}><Plus /> リンクを追加</button></div><LinkEditor links={draft.links} onChange={links => update('links', links)} /></div>
     <div className="modal-actions">{!isNew && <button type="button" className="danger-btn" onClick={() => onDelete(draft.id)}><Trash2 /> 削除</button>}<span /><button type="button" className="ghost-btn" onClick={onClose}>キャンセル</button><button className="primary-btn" disabled={Boolean(duplicate)}>{isNew ? '本を登録する' : '変更を保存'}</button></div>
   </form></section></div>

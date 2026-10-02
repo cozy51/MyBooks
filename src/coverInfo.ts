@@ -2,7 +2,8 @@
 import { categories } from './data'
 import { storedToken } from './drive'
 
-export interface CoverInfo { title: string; author: string; categoryId: string }
+/** fullTitle: 同じタイトルの本があるときに使う、前置きやサブタイトルも含めた詳しい書名 */
+export interface CoverInfo { title: string; fullTitle: string; author: string; categoryId: string }
 
 /** 送る画像を長辺1200pxのJPEGに縮める（通信量とAPIの制限を抑えるため） */
 async function shrink(image: Blob): Promise<{ image: string; mimeType: string }> {
@@ -34,5 +35,5 @@ export async function readCoverInfo(source: { image: Blob } | { cover: string })
   if (res.status === 404 && !data) throw new Error('表紙を読み取るAPI（/api/cover-info）が見つかりません。Vercelへのデプロイ、または npm run dev で起動してください。')
   if (res.status === 504 && !data) throw new Error('表紙の読み取りが時間内に終わりませんでした。もう一度お試しください。')
   if (!res.ok || !data) throw new Error(data?.error || `表紙を読み取れませんでした（${res.status}）`)
-  return { title: data.title ?? '', author: data.author ?? '', categoryId: data.categoryId ?? '' }
+  return { title: data.title ?? '', fullTitle: data.fullTitle || data.title || '', author: data.author ?? '', categoryId: data.categoryId ?? '' }
 }

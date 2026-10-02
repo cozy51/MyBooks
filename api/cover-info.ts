@@ -9,12 +9,14 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const DRIVE_ID = /^[\w-]{25,}$/
 
 interface Category { id: string; name: string }
-interface CoverInfo { title: string; author: string; categoryId: string }
+interface CoverInfo { title: string; fullTitle?: string; author: string; categoryId: string }
 
-const instructions = (categories: Category[]) => `これは本の表紙の画像です。表紙に印刷された文字を読み取り、次の3つを答えてください。
+const instructions = (categories: Category[]) => `これは本の表紙の画像です。表紙に印刷された文字を読み取り、次の4つを答えてください。
 - title: 表紙で一番大きな文字で書かれた書名（メインタイトル）だけ。画面に20文字程度しか表示できないので、それより小さな文字のサブタイトル・副題、英語などの別表記、帯やキャッチコピー、シリーズ名、出版社名は含めない。書名の上や下にある小さな文字の前置き・肩書き（「〜が教える」「〜で学んだ」など）も含めない。書名が複数行に分かれていても1つにつなげる。
   例1: 大きな文字「プリンシプル オブ プログラミング」、小さな文字「3年目までに身につけたい 一生役立つ101の原理原則」→ title は「プリンシプル オブ プログラミング」
   例2: 小さな文字「スタンフォード大学で学んだ睡眠医学の専門家が教える」、大きな文字「寝不足でも結果を出す全技法」→ title は「寝不足でも結果を出す全技法」
+- fullTitle: 同じタイトルの本と見分けるための、より詳しい書名。title に、書名の一部として表紙に書かれた小さな文字の前置きやサブタイトル・副題を加えたもの（帯・キャッチコピー・出版社名・著者名は含めない）。加えるものが無ければ title と同じ。
+  例: 小さな文字「マンガでやさしくわかる」、大きな文字「アンガーマネジメント」→ title は「アンガーマネジメント」、fullTitle は「マンガでやさしくわかるアンガーマネジメント」
 - author: 著者名だけ（「著」「編」「監修」「訳」などは付けない）。日本人の名前は姓と名の間に半角スペースを1つ入れる（例: 田坂 広志）。外国人の名前は表紙の表記のまま（例: ボリス・チェルニー）。複数いる場合は「、」で区切る。読み取れなければ空文字。
 - categoryId: 次の分類から、この本の内容に最も合うものの id を1つ。
 ${categories.map(c => `  ${c.id}: ${c.name}`).join('\n')}
@@ -44,7 +46,7 @@ async function askGeminiModel(p: Provider, model: string, image: string, mimeTyp
         // 文字を読み取るだけなので、考える時間（thinking）は短くして待ち時間を減らす
         ...(thinking && { thinkingConfig: { thinkingLevel: 'low' } }),
         responseMimeType: 'application/json',
-        responseSchema: { type: 'OBJECT', properties: { title: { type: 'STRING', description: '表紙で一番大きな文字の書名だけ（サブタイトル・別表記は含めない）' }, author: { type: 'STRING' }, categoryId: { type: 'STRING', enum: categories.map(c => c.id) } }, required: ['title', 'author', 'categoryId'] },
+        responseSchema: { type: 'OBJECT', properties: { title: { type: 'STRING', description: '表紙で一番大きな文字の書名だけ（サブタイトル・別表記は含めない）' }, fullTitle: { type: 'STRING', description: '前置きやサブタイトルも含めた詳しい書名' }, author: { type: 'STRING' }, categoryId: { type: 'STRING', enum: categories.map(c => c.id) } }, required: ['title', 'fullTitle', 'author', 'categoryId'] },
       },
     }),
   })
@@ -66,7 +68,7 @@ async function askOpenAI(p: Provider, image: string, mimeType: string, categorie
     body: JSON.stringify({
       model, temperature: 0, response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: [
-        { type: 'text', text: `${instructions(categories)}\n{"title": "...", "author": "...", "categoryId": "..."} のJSONだけを返してください。` },
+        { type: 'text', text: `${instructions(categories)}\n{"title": "...", "fullTitle": "...", "author": "...", "categoryId": "..."} のJSONだけを返してください。` },
         { type: 'image_url', image_url: { url: `data:${mimeType};base64,${image}` } },
       ] }],
     }),
@@ -120,7 +122,7 @@ export async function POST(request: Request): Promise<Response> {
     const categoryId = categories.some(c => c.id === info.categoryId) ? info.categoryId : ''
     // 著者名の空白は半角1つにそろえる（全角スペース・連続した空白を直す）
     const author = text(info.author).split(/[、,，]/).map(name => name.replace(/[\s\u3000]+/g, ' ').trim()).filter(Boolean).join('、')
-    return reply(200, { title: text(info.title), author, categoryId })
+    return reply(200, { title: text(info.title), fullTitle: text(info.fullTitle) || text(info.title), author, categoryId })
   } catch (e) {
     if (e instanceof UpstreamError && e.status === 504) return reply(504, { error: '表紙の読み取りが時間内に終わりませんでした。もう一度お試しください。', code: 'timeout' })
     if (e instanceof UpstreamError && e.status === 404) return reply(502, { error: '表紙の読み取りに使うAIモデルが見つかりませんでした。環境変数 VISION_MODEL に利用できるモデル名（例: gemini-flash-latest）を設定してください。', code: 'model_unavailable' })

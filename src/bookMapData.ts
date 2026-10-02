@@ -225,7 +225,15 @@ let remoteChecked = false
  * 3. 座標が無い本を配置（多ければUMAPで全体を配置し直す）
  * 4. 変化があれば保存
  */
-export async function updateBookMap(books: Book[], onProgress: (p: MapProgress) => void, opts: { relayout?: boolean } = {}): Promise<UpdateResult> {
+export function updateBookMap(books: Book[], onProgress: (p: MapProgress) => void, opts: { relayout?: boolean } = {}): Promise<UpdateResult> {
+  // マップ画面と本の詳細画面から同時に呼ばれても、キャッシュを取り違えないよう1つずつ実行する
+  const result = updateQueue.then(() => updateBookMapNow(books, onProgress, opts))
+  updateQueue = result.catch(() => undefined)
+  return result
+}
+let updateQueue: Promise<unknown> = Promise.resolve()
+
+async function updateBookMapNow(books: Book[], onProgress: (p: MapProgress) => void, opts: { relayout?: boolean }): Promise<UpdateResult> {
   const hashes = new Map<string, string>(), texts = new Map<string, string>()
   for (const book of books) { const text = embedText(book); if (text) { texts.set(book.id, text); hashes.set(book.id, hash(text)) } }
 
@@ -292,3 +300,30 @@ export async function updateBookMap(books: Book[], onProgress: (p: MapProgress) 
 
 /** Driveに接続し直したときなどに、Drive上のマップデータをもう一度確認する */
 export function recheckRemote() { remoteChecked = false }
+
+// ---- 類似する本 ----
+
+export interface SimilarBook { book: Book; score: number }
+
+/**
+ * 内容（タイトル＋要約）が近い本を、マップと同じEmbeddingのコサイン類似度で探す。
+ * この本のEmbeddingがまだ無い（未計算・内容の変更後）ときは null
+ */
+export async function findSimilarBooks(book: Book, books: Book[], limit = 10): Promise<SimilarBook[] | null> {
+  memoryCache ??= await loadLocal()
+  const text = embedText(book)
+  const entry = text && memoryCache?.entries[book.id]
+  if (!memoryCache || !entry || entry.h !== hash(text)) return null
+  const target = dequantize(entry.e)
+  const results: SimilarBook[] = []
+  for (const other of books) {
+    if (other.id === book.id) continue
+    const otherText = embedText(other), e = otherText && memoryCache.entries[other.id]
+    if (!e || e.h !== hash(otherText)) continue
+    const v = dequantize(e.e)
+    let score = 0
+    for (let i = 0; i < v.length; i++) score += v[i] * target[i]
+    results.push({ book: other, score })
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, limit)
+}

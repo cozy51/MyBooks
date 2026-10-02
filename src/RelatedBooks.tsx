@@ -1,0 +1,83 @@
+import { useEffect, useState } from 'react'
+import { BookOpen, ChevronRight, LoaderCircle, Sparkles, UserRound } from 'lucide-react'
+import { CoverImage } from './CoverImage'
+import { categories, statusClass } from './data'
+import { embedText, findSimilarBooks, updateBookMap, type SimilarBook } from './bookMapData'
+import type { Book } from './types'
+
+/** 著者名を比較用にそろえる（全角半角・空白の違いと「著」「編」などの役割表記を無視し、複数の著者は分ける） */
+function authorKeys(author: string): string[] {
+  return author.normalize('NFKC').split(/[、,;／/&＋+]|\s+and\s+/i)
+    .map(name => name.replace(/[(（[［].*?[)）\]］]/g, '').replace(/\s*(編著|共著|監修|監訳|編集|原著|著|編|訳|作|文|絵)\s*$/, '').replace(/\s+/g, '').toLowerCase())
+    .filter(Boolean)
+}
+
+/** 同じ著者（共著者のいずれかが同じ）の本。タイトル順 */
+function sameAuthorBooks(book: Book, books: Book[]): Book[] {
+  const keys = new Set(authorKeys(book.author))
+  if (!keys.size) return []
+  return books.filter(b => b.id !== book.id && authorKeys(b.author).some(k => keys.has(k)))
+    .sort((a, b) => a.title.localeCompare(b.title, 'ja'))
+}
+
+function RelatedRow({ book, score, onOpen }: { book: Book; score?: number; onOpen: (b: Book) => void }) {
+  const child = categories.find(c => c.id === book.categoryId)
+  return <li><button type="button" className="related-row" onClick={() => onOpen(book)}>
+    <span className="related-cover"><CoverImage src={book.cover} alt="" width={160} fallback={<BookOpen />} /></span>
+    <span className="related-body">
+      <strong>{book.title}</strong>
+      <small>{book.author || '著者未登録'}{child && ` ・ ${child.name}`}</small>
+      {book.memo.trim() && <span className="related-memo">{book.memo.trim().slice(0, 80)}{book.memo.trim().length > 80 && '…'}</span>}
+    </span>
+    <span className="related-side">
+      {score !== undefined && <span className="related-score" title="タイトルと要約の内容の近さ">類似度 {Math.round(Math.max(0, score) * 100)}%</span>}
+      <span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>
+      <ChevronRight />
+    </span>
+  </button></li>
+}
+
+/** 分類マップと同じEmbeddingを使って、内容が近い本を10冊表示する */
+export function SimilarBooks({ book, books, onOpen }: { book: Book; books: Book[]; onOpen: (b: Book) => void }) {
+  const [result, setResult] = useState<{ id: string; items: SimilarBook[] | null } | null>(null)
+  const [computing, setComputing] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let active = true
+    void findSimilarBooks(book, books).then(items => { if (active) setResult({ id: book.id, items }) })
+    return () => { active = false }
+  }, [book, books])
+
+  // この本のEmbeddingが無いときは、マップのデータを更新してから探し直す
+  const compute = async () => {
+    setComputing(true); setError('')
+    try {
+      const { error } = await updateBookMap(books, () => {})
+      if (error) setError(error.message)
+      setResult({ id: book.id, items: await findSimilarBooks(book, books) })
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setComputing(false) }
+  }
+
+  if (!embedText(book)) return <p className="related-empty">タイトルを入力して保存すると、内容が近い本を探せます。</p>
+  if (!result || result.id !== book.id) return <p className="related-empty"><LoaderCircle className="spin" /> 内容が近い本を探しています…</p>
+  if (!result.items) return <div className="related-empty">
+    <p>この本はまだ分類マップで計算されていません（要約などを変更した直後も再計算が必要です）。</p>
+    <button type="button" className="secondary-btn" disabled={computing} onClick={() => void compute()}>{computing ? <LoaderCircle className="spin" /> : <Sparkles />} {computing ? '計算しています…' : '内容の近さを計算する'}</button>
+    {error && <p className="field-error">{error}</p>}
+  </div>
+  if (!result.items.length) return <p className="related-empty">比べられる本がまだありません。分類マップを開くと、ほかの本も計算されます。</p>
+  return <>
+    <p className="related-lead"><Sparkles /> 分類マップと同じく、タイトルと要約の内容が近い順に{result.items.length}冊を表示しています。</p>
+    <ul className="related-list">{result.items.map(item => <RelatedRow key={item.book.id} book={item.book} score={item.score} onOpen={onOpen} />)}</ul>
+  </>
+}
+
+export function SameAuthorBooks({ book, books, onOpen }: { book: Book; books: Book[]; onOpen: (b: Book) => void }) {
+  if (!authorKeys(book.author).length) return <p className="related-empty">著者が登録されていません。「詳細・編集」で著者を入力すると、同じ著者の本を表示できます。</p>
+  const list = sameAuthorBooks(book, books)
+  if (!list.length) return <p className="related-empty">{book.author} の本は、ほかに登録されていません。</p>
+  return <>
+    <p className="related-lead"><UserRound /> {book.author} の本が、ほかに{list.length}冊あります。</p>
+    <ul className="related-list">{list.map(b => <RelatedRow key={b.id} book={b} onOpen={onOpen} />)}</ul>
+  </>
+}

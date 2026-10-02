@@ -1,22 +1,30 @@
 import type { BookLink } from './types'
 
-/** 全ページスキャン。表示名は固定で、関連リンクの先頭に置く（要約の作成にも使う） */
+/** 全ページスキャン。要約の作成にも使う */
 export const SCAN_LABEL = '全ページスキャン'
-/** 関連リンクの名前の候補。新しい本・編集画面には、この順で最初から欄を用意する */
-export const LINK_PRESETS = [SCAN_LABEL, 'インフォグラフィック', '音声解説', '動画解説', 'GeminiNotebookスライド']
+/** 固定のリンク欄。表示名は変えられず、この順で先頭に並ぶ（新しい本・編集画面には最初から欄を用意する） */
+export const LINK_PRESETS = [SCAN_LABEL, 'インフォグラフィック', 'GeminiNotebookスライド', '音声解説', '動画解説']
+/** カードに表示するときの短い名前 */
+export const SHORT_LABELS: Record<string, string> = { [SCAN_LABEL]: 'Scan', 'インフォグラフィック': 'InfoG', 'GeminiNotebookスライド': 'Slide', '音声解説': 'Voice', '動画解説': 'Movie' }
 /** カードに表示するリンクの最大数 */
 export const CARD_LINK_LIMIT = 6
 
 export const newLink = (label = ''): BookLink => ({ id: crypto.randomUUID(), label, url: '' })
 
 export const isScan = (link: BookLink) => link.label.trim() === SCAN_LABEL
-/** 全ページスキャンを先頭に（ほかのリンクの順番はそのまま） */
-export const scanFirst = (links: BookLink[]) => [...links.filter(isScan), ...links.filter(l => !isScan(l))]
+const presetIndex = (link: BookLink) => LINK_PRESETS.indexOf(link.label.trim())
+/** 固定のリンク欄か（表示名の変更・並べ替え・削除はできない） */
+export const isPreset = (link: BookLink) => presetIndex(link) >= 0
+/** 固定のリンクを決まった順で先頭に（ほかのリンクの順番はそのまま） */
+export const presetsFirst = (links: BookLink[]) => [
+  ...links.filter(isPreset).sort((a, b) => presetIndex(a) - presetIndex(b)),
+  ...links.filter(l => !isPreset(l)),
+]
 
-/** 編集用：まだ無い候補の欄を末尾に追加する（全ページスキャンは先頭） */
+/** 編集用：まだ無い固定の欄を追加する（固定の欄は決まった順で先頭） */
 export function withPresetRows(links: BookLink[]): BookLink[] {
   const labels = new Set(links.map(l => l.label.trim()))
-  return scanFirst([...links.map(l => ({ ...l })), ...LINK_PRESETS.filter(p => !labels.has(p)).map(newLink)])
+  return presetsFirst([...links.map(l => ({ ...l })), ...LINK_PRESETS.filter(p => !labels.has(p)).map(newLink)])
 }
 
 // URLに使える文字（半角英数字と記号）だけを対象にする。日本語や空白はURLの外とみなす
@@ -34,7 +42,7 @@ export function sanitizeUrlInput(value: string): string | null {
 
 /** 保存用：URLが空・URLとして正しくない欄を取り除く */
 export function cleanLinks(links: BookLink[]): BookLink[] {
-  return scanFirst(links.map(l => ({ id: l.id, label: l.label.trim(), url: l.url.trim() })).filter(l => isUrl(l.url)))
+  return presetsFirst(links.map(l => ({ id: l.id, label: l.label.trim(), url: l.url.trim() })).filter(l => isUrl(l.url)))
 }
 
 

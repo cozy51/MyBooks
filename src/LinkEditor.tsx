@@ -52,8 +52,8 @@ export function LinkEditor({ links, onChange }: { links: BookLink[]; onChange: (
           onPointerDown={startDrag(link.id)} onPointerMove={dragOver} onPointerUp={endDrag} onPointerCancel={endDrag} onKeyDown={keyMove(link.id, index)}><GripVertical /></button>}
         {fixed ? <input value={link.label} readOnly className="label-fixed" title="全ページスキャンの表示名は変更できません" />
           : <input list="link-label-options" value={link.label} onChange={e => { if (e.target.value.trim() !== SCAN_LABEL) update(link.id, { label: e.target.value }) }} placeholder="表示名（候補から選択・入力）" />}
-        <span className="url-field"><input type="url" inputMode="url" autoComplete="off" spellCheck={false} value={link.url} onChange={e => typeUrl(link.id, e.target.value)} onBlur={() => leaveUrl(link)} placeholder="https://..." />
-          <button type="button" className="url-paste" onClick={() => void pasteUrl(link.id)} aria-label="クリップボードのURLを貼り付け" title="クリップボードのURLを貼り付け"><ClipboardPaste /></button></span>
+        <span className="url-field"><button type="button" className="url-paste" onClick={() => void pasteUrl(link.id)} aria-label="クリップボードのURLを貼り付け" title="クリップボードのURLを貼り付け"><ClipboardPaste /></button>
+          <input type="url" inputMode="url" autoComplete="off" spellCheck={false} value={link.url} onChange={e => typeUrl(link.id, e.target.value)} onBlur={() => leaveUrl(link)} placeholder="https://..." /></span>
         {isUrl(link.url) ? <a href={link.url} target="_blank" rel="noreferrer" aria-label="新しいタブで開く"><ExternalLink /></a> : <span />}
         {fixed ? <span /> : <button type="button" className="link-delete" onClick={() => onChange(links.filter(l => l.id !== link.id))} aria-label="リンクを削除"><Trash2 /></button>}
       </div>

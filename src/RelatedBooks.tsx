@@ -20,7 +20,16 @@ function sameAuthorBooks(book: Book, books: Book[]): Book[] {
     .sort((a, b) => a.title.localeCompare(b.title, 'ja'))
 }
 
-function RelatedRow({ book, score, onOpen }: { book: Book; score?: number; onOpen: (b: Book) => void }) {
+/** 類似度の横棒。上位の本は数%しか差がないため、一覧の中の最小〜最大を棒の長さ20〜100%に広げて違いを見やすくする */
+function ScoreBar({ score, ratio }: { score: number; ratio: number }) {
+  const percent = Math.round(Math.max(0, score) * 100)
+  return <span className="related-score" title={`タイトルと要約の内容の近さ：${percent}%`} aria-label={`類似度 ${percent}%`}>
+    <span className="related-score-track"><span className="related-score-fill" style={{ width: `${20 + 80 * ratio}%` }} /></span>
+    <span className="related-score-num">{percent}%</span>
+  </span>
+}
+
+function RelatedRow({ book, score, ratio, onOpen }: { book: Book; score?: number; ratio?: number; onOpen: (b: Book) => void }) {
   const child = categories.find(c => c.id === book.categoryId)
   return <li><button type="button" className="related-row" onClick={() => onOpen(book)}>
     <span className="related-cover"><CoverImage src={book.cover} alt="" width={160} fallback={<BookOpen />} /></span>
@@ -30,7 +39,7 @@ function RelatedRow({ book, score, onOpen }: { book: Book; score?: number; onOpe
       {book.memo.trim() && <span className="related-memo">{book.memo.trim().slice(0, 80)}{book.memo.trim().length > 80 && '…'}</span>}
     </span>
     <span className="related-side">
-      {score !== undefined && <span className="related-score" title="タイトルと要約の内容の近さ">類似度 {Math.round(Math.max(0, score) * 100)}%</span>}
+      {score !== undefined && <ScoreBar score={score} ratio={ratio ?? 1} />}
       <span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>
       <ChevronRight />
     </span>
@@ -66,9 +75,12 @@ export function SimilarBooks({ book, books, onOpen }: { book: Book; books: Book[
     {error && <p className="field-error">{error}</p>}
   </div>
   if (!result.items.length) return <p className="related-empty">比べられる本がまだありません。分類マップを開くと、ほかの本も計算されます。</p>
+  const scores = result.items.map(item => item.score)
+  const max = Math.max(...scores), min = Math.min(...scores)
+  const ratio = (score: number) => max > min ? (score - min) / (max - min) : 1
   return <>
     <p className="related-lead"><Sparkles /> 分類マップと同じく、タイトルと要約の内容が近い順に{result.items.length}冊を表示しています。</p>
-    <ul className="related-list">{result.items.map(item => <RelatedRow key={item.book.id} book={item.book} score={item.score} onOpen={onOpen} />)}</ul>
+    <ul className="related-list">{result.items.map(item => <RelatedRow key={item.book.id} book={item.book} score={item.score} ratio={ratio(item.score)} onOpen={onOpen} />)}</ul>
   </>
 }
 

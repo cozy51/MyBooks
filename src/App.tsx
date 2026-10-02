@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, ScanText, Search, Settings, Sparkles, Trash2, Upload, UserRound, X } from 'lucide-react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, ScanText, Undo2, Search, Settings, Sparkles, Trash2, Upload, UserRound, X } from 'lucide-react'
 import { COVER_FOLDER_ID, COVER_FOLDER_URL, driveFileId, driveFileUrl, normalizeCover } from './cover'
 import { categories, sampleBooks, statusClass } from './data'
 import { CoverImage, type Zoom } from './CoverImage'
@@ -307,10 +307,7 @@ function BookModal({ book, books, summaryJob, onSummarize, onSummaryApplied, tab
     const read: Partial<Pick<Book, 'title' | 'author' | 'categoryId'>> = { ...(info.title && { title: info.title }), ...(info.author && { author: info.author }), ...(category && { categoryId: category.id }) }
     const keys = Object.keys(read) as (keyof typeof read)[]
     if (!keys.length) { setReadNote('表紙から読み取れる文字がありませんでした。'); return }
-    // 入力済みの内容と違うときは確認する（新しい本の分類は前回の分類が入っているだけなので確認しない）
-    const label = (key: keyof typeof read, value: string) => key === 'categoryId' ? categoryLabel(value) : value
-    const overwrite = keys.filter(key => draft[key].trim() && read[key] !== draft[key].trim() && !(key === 'categoryId' && isNew))
-    if (overwrite.length && !confirm(`表紙から読み取った内容で上書きしますか？\n\n${overwrite.map(key => `${FILL_LABEL[key]}：${label(key, draft[key])} → ${label(key, read[key]!)}`).join('\n')}`)) return
+    // 確認せずに入力し、変更した項目には変更前の値と「元に戻す」を表示する
     setDraft(d => ({ ...d, ...read }))
     const changed = keys.filter(key => read[key] !== draft[key].trim())
     const same = keys.filter(key => !changed.includes(key))
@@ -354,7 +351,9 @@ function BookModal({ book, books, summaryJob, onSummarize, onSummaryApplied, tab
   const fillBefore = (key: 'title' | 'author' | 'categoryId' | 'memo') => {
     const f = filled.get(key); if (!f?.changed) return null
     const before = key === 'categoryId' ? categoryLabel(f.before) : f.before.trim()
-    return <small className="fill-before">変更前：{before ? (before.length > 60 ? `${before.slice(0, 60)}…` : before) : '（空欄）'}</small>
+    const shown = key === 'memo' && before.length > 120 ? `${before.slice(0, 120)}…` : before
+    return <span className="fill-before"><b>変更前</b>{before ? <s title={before}>{shown}</s> : <em>（空欄）</em>}
+      <button type="button" onClick={e => { e.preventDefault(); update(key, f.before) }} title="変更前の内容に戻します"><Undo2 />元に戻す</button></span>
   }
   const onPaste = (e: React.ClipboardEvent) => {
     const image = canPasteCover ? Array.from(e.clipboardData.files).find(f => f.type.startsWith('image/')) : undefined

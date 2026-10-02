@@ -12,7 +12,9 @@ interface Category { id: string; name: string }
 interface CoverInfo { title: string; author: string; categoryId: string }
 
 const instructions = (categories: Category[]) => `これは本の表紙の画像です。表紙に印刷された文字を読み取り、次の3つを答えてください。
-- title: 本の正式なタイトル。サブタイトルが明確にあれば「タイトル サブタイトル」のように続けてよい。帯やキャッチコピー、シリーズ名、出版社名は含めない。
+- title: 表紙で一番大きな文字で書かれた書名（メインタイトル）だけ。画面に20文字程度しか表示できないので、それより小さな文字のサブタイトル・副題、英語などの別表記、帯やキャッチコピー、シリーズ名、出版社名は含めない。書名の上や下にある小さな文字の前置き・肩書き（「〜が教える」「〜で学んだ」など）も含めない。書名が複数行に分かれていても1つにつなげる。
+  例1: 大きな文字「プリンシプル オブ プログラミング」、小さな文字「3年目までに身につけたい 一生役立つ101の原理原則」→ title は「プリンシプル オブ プログラミング」
+  例2: 小さな文字「スタンフォード大学で学んだ睡眠医学の専門家が教える」、大きな文字「寝不足でも結果を出す全技法」→ title は「寝不足でも結果を出す全技法」
 - author: 著者名だけ（「著」「編」「監修」「訳」などは付けない）。日本人の名前は姓と名の間に半角スペースを1つ入れる（例: 田坂 広志）。外国人の名前は表紙の表記のまま（例: ボリス・チェルニー）。複数いる場合は「、」で区切る。読み取れなければ空文字。
 - categoryId: 次の分類から、この本の内容に最も合うものの id を1つ。
 ${categories.map(c => `  ${c.id}: ${c.name}`).join('\n')}
@@ -55,7 +57,7 @@ async function askGeminiModel(p: Provider, model: string, image: string, mimeTyp
         // 文字を読み取るだけなので、考える時間（thinking）は短くして待ち時間を減らす
         ...(thinking && { thinkingConfig: { thinkingLevel: 'low' } }),
         responseMimeType: 'application/json',
-        responseSchema: { type: 'OBJECT', properties: { title: { type: 'STRING' }, author: { type: 'STRING' }, categoryId: { type: 'STRING', enum: categories.map(c => c.id) } }, required: ['title', 'author', 'categoryId'] },
+        responseSchema: { type: 'OBJECT', properties: { title: { type: 'STRING', description: '表紙で一番大きな文字の書名だけ（サブタイトル・別表記は含めない）' }, author: { type: 'STRING' }, categoryId: { type: 'STRING', enum: categories.map(c => c.id) } }, required: ['title', 'author', 'categoryId'] },
       },
     }),
   })

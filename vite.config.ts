@@ -1,20 +1,24 @@
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+import { existsSync } from 'node:fs'
 
-/** 開発サーバーでも api/ の Vercel Function（/api/embed）を動かす */
+/** 開発サーバーでも api/ の Vercel Function（/api/embed など）を動かす */
 function devApi(): Plugin {
   return {
     name: 'mybooks-dev-api',
     configureServer(server) {
       // .env.local などのサーバー用の値（GEMINI_API_KEY など）を process.env に読み込む
       for (const [key, value] of Object.entries(loadEnv(server.config.mode, process.cwd(), ''))) process.env[key] ??= value
-      server.middlewares.use('/api/embed', async (req, res) => {
+      server.middlewares.use('/api', async (req, res, next) => {
+        // /api/<名前> → api/<名前>.ts（_ で始まるファイルは共通処理なので公開しない）
+        const name = req.url?.split('?')[0].match(/^\/([a-z][\w-]*)$/)?.[1]
+        if (!name || !existsSync(`api/${name}.ts`)) return next()
         try {
           const chunks: Buffer[] = []
           for await (const chunk of req) chunks.push(chunk as Buffer)
           const headers = new Headers()
           for (const [key, value] of Object.entries(req.headers)) if (typeof value === 'string') headers.set(key, value)
-          const { POST } = await server.ssrLoadModule('/api/embed.ts') as { POST: (r: Request) => Promise<Response> }
+          const { POST } = await server.ssrLoadModule(`/api/${name}.ts`) as { POST: (r: Request) => Promise<Response> }
           const response = req.method === 'POST'
             ? await POST(new Request(`http://localhost${req.originalUrl ?? ''}`, { method: 'POST', headers, body: Buffer.concat(chunks) }))
             : new Response(null, { status: 405 })

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, Search, Settings, Sparkles, Trash2, Upload, UserRound, X } from 'lucide-react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, ScanText, Search, Settings, Sparkles, Trash2, Upload, UserRound, X } from 'lucide-react'
 import { COVER_FOLDER_ID, COVER_FOLDER_URL, driveFileId, driveFileUrl, normalizeCover } from './cover'
 import { categories, sampleBooks, statusClass } from './data'
 import { CoverImage, type Zoom } from './CoverImage'
@@ -7,6 +7,7 @@ import { DATA_FOLDER_URL, DRIVE_API_KEY, DRIVE_CLIENT_ID, DRIVE_FILE_NAME, pickI
 import { useDriveSync, type SyncStatus } from './useDriveSync'
 import { CardLinks, LinkEditor } from './LinkEditor'
 import { SameAuthorBooks, SimilarBooks } from './RelatedBooks'
+import { readCoverInfo, type CoverInfo } from './coverInfo'
 import { cleanLinks, newLink, withPresetRows } from './links'
 import type { Book, BookLink, ReadingStatus } from './types'
 
@@ -209,18 +210,42 @@ function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onS
   const uploadRef = useRef<Promise<string | null> | null>(null)
   const closingRef = useRef(false)
   // クリップボードの画像を表紙フォルダに「タイトル.拡張子」で保存し、そのファイルIDを表紙にする
+  // タイトルが空のときは、先に画像からタイトルなどを読み取ってから保存する
   const pasteCover = async (image?: Blob) => {
-    if (uploading) return
-    const title = draft.title.trim()
-    if (!title) return alert('先にタイトルを入力してください（表紙画像のファイル名に使います）')
+    if (uploading || reading) return
+    let title = draft.title.trim()
     try {
       image ??= await readClipboardImage() ?? undefined
       if (!image) return alert('クリップボードに画像がありません。表紙の画像をコピーしてから押してください')
+      if (!title) {
+        setReading(true)
+        const info = await readCoverInfo({ image }).catch(() => null).finally(() => setReading(false))
+        title = info?.title ?? ''
+        if (!title) return alert('表紙からタイトルを読み取れませんでした。先にタイトルを入力してください（表紙画像のファイル名に使います）')
+        applyCoverInfo(info!)
+      }
       setUploading(true)
       uploadRef.current = uploadCoverImage(image, title, COVER_FOLDER_ID)
       const id = await uploadRef.current
       if (id) update('cover', id)
     } catch (e) { alert(e instanceof Error ? e.message : String(e)) } finally { uploadRef.current = null; setUploading(false) }
+  }
+  // 表紙から読み取ったタイトル・著者・分類を入力する（入力済みの内容と違うときは確認する）
+  const [reading, setReading] = useState(false)
+  const [readNote, setReadNote] = useState('')
+  const applyCoverInfo = (info: CoverInfo) => {
+    const changes = (['title', 'author'] as const).filter(key => info[key] && info[key] !== draft[key].trim())
+    const overwrite = changes.filter(key => draft[key].trim())
+    if (overwrite.length && !confirm(`表紙から読み取った内容で上書きしますか？\n\n${overwrite.map(key => `${key === 'title' ? 'タイトル' : '著者'}：${draft[key]} → ${info[key]}`).join('\n')}`)) return
+    const category = categories.find(c => c.id === info.categoryId && c.parent)
+    setDraft(d => ({ ...d, ...Object.fromEntries(changes.map(key => [key, info[key]])), ...(category ? { categoryId: category.id } : {}) }))
+    setReadNote(changes.length || category ? '表紙から読み取って入力しました。内容を確認してください。' : '表紙から読み取れる文字がありませんでした。')
+  }
+  const readCover = async () => {
+    if (reading || uploading) return
+    if (!draft.cover.trim()) return alert('先に表紙の画像を設定してください（貼り付け・Driveから選ぶ・ファイルIDの入力）')
+    setReading(true); setReadNote('')
+    try { applyCoverInfo(await readCoverInfo({ cover: draft.cover })) } catch (e) { alert(e instanceof Error ? e.message : String(e)) } finally { setReading(false) }
   }
   const onPaste = (e: React.ClipboardEvent) => {
     const image = canPasteCover ? Array.from(e.clipboardData.files).find(f => f.type.startsWith('image/')) : undefined
@@ -250,11 +275,11 @@ function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onS
     {tab === 'author' && <div className="related-panel"><SameAuthorBooks book={{ ...book, author: draft.author }} books={books} onOpen={openRelated} /></div>}
     <form onSubmit={submit} hidden={tab !== 'edit'}>
     <div className="form-layout"><div className="cover-editor"><CoverImage src={draft.cover} alt={`${draft.title || '表紙'}のプレビュー`} onZoom={onZoom} fallback={canPasteCover
-      ? <button type="button" className="cover-placeholder paste-target" onClick={() => void pasteCover()} disabled={uploading} title="クリップボードの画像を表紙として保存">{uploading ? <><LoaderCircle className="spin" /><span>アップロード中…</span></> : <><ClipboardPaste /><span>{draft.cover ? '表示できません' : 'クリックして'}<br />クリップボードの<br />画像を貼り付け</span></>}</button>
+      ? <button type="button" className="cover-placeholder paste-target" onClick={() => void pasteCover()} disabled={uploading || reading} title="クリップボードの画像を表紙として保存">{uploading || reading ? <><LoaderCircle className="spin" /><span>{reading ? '表紙を読み取り中…' : 'アップロード中…'}</span></> : <><ClipboardPaste /><span>{draft.cover ? '表示できません' : 'クリックして'}<br />クリップボードの<br />画像を貼り付け</span></>}</button>
       : <div className="cover-placeholder"><BookOpen /><span>{draft.cover ? '表示できません' : '表紙プレビュー'}</span></div>} /><div className="cover-fields"><label>表紙（DriveのファイルID）<input value={draft.cover} onChange={e => update('cover', normalizeCover(e.target.value))} placeholder="ファイルID・共有リンク・画像URL" /></label>
       <div className="cover-actions">{canPasteCover && <button type="button" className="secondary-btn" onClick={() => void pasteCover()} disabled={uploading}>{uploading ? <LoaderCircle className="spin" /> : <ClipboardPaste />} {uploading ? 'アップロード中…' : '画像を貼り付け'}</button>}{canPickCover && <button type="button" className="secondary-btn" onClick={pickCover}><FolderOpen /> Driveから選ぶ</button>}<a href={driveFileUrl(draft.cover) ?? COVER_FOLDER_URL} target="_blank" rel="noreferrer"><ExternalLink />{driveFileUrl(draft.cover) ? 'Driveで開く' : '表紙フォルダを開く'}</a></div>
       <small className="cover-hint">{canPasteCover && 'コピーした画像は、表紙フォルダに「タイトル名」のファイルとして保存されます（Ctrl+Vでも可）。'}表紙フォルダの画像はファイルIDで保存します。共有リンクを貼るとIDに変換されます。表示するには、フォルダの共有設定を「リンクを知っている全員」にしてください。</small></div></div>
-    <div className="fields"><label>タイトル <em>必須</em><input className={duplicate ? 'invalid' : undefined} required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" />{duplicate && <small className="field-error">{duplicate.reason === 'url' ? '同じURLの関連リンクを持つ本' : '同じ本'}がすでに登録されています（{duplicate.book.title}{duplicate.book.author && ` / ${duplicate.book.author}`}）</small>}</label><label>著者<input value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" /></label><div className="field-row"><label>分類<select value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select></label><label>基準月<input className={monthError ? 'invalid' : undefined} list="base-month-options" inputMode="numeric" autoComplete="off" placeholder="YYYY-MM（空欄可）" value={draft.baseMonth} onChange={e => { update('baseMonth', e.target.value); setMonthError(false) }} onBlur={fixMonth} />{monthError && <small className="field-error">YYYY-MM の形式で入力してください（例：2026-09）</small>}<datalist id="base-month-options">{monthOptions.map(m => <option key={m} value={m} />)}</datalist></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約<textarea rows={4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder="本の要約" /></label></div></div>
+    <div className="fields"><label>タイトル <em>必須</em><input className={duplicate ? 'invalid' : undefined} required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" />{duplicate && <small className="field-error">{duplicate.reason === 'url' ? '同じURLの関連リンクを持つ本' : '同じ本'}がすでに登録されています（{duplicate.book.title}{duplicate.book.author && ` / ${duplicate.book.author}`}）</small>}</label><label>著者<span className="input-with-action"><input value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" /><button type="button" className="field-action" onClick={() => void readCover()} disabled={reading} title="表紙の画像から読み取り（タイトル・著者・分類を入力）" aria-label="表紙の画像からタイトル・著者・分類を読み取る">{reading ? <LoaderCircle className="spin" /> : <ScanText />}<span>表紙から入力</span></button></span>{readNote && <small className="field-note">{readNote}</small>}</label><div className="field-row"><label>分類<select value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select></label><label>基準月<input className={monthError ? 'invalid' : undefined} list="base-month-options" inputMode="numeric" autoComplete="off" placeholder="YYYY-MM（空欄可）" value={draft.baseMonth} onChange={e => { update('baseMonth', e.target.value); setMonthError(false) }} onBlur={fixMonth} />{monthError && <small className="field-error">YYYY-MM の形式で入力してください（例：2026-09）</small>}<datalist id="base-month-options">{monthOptions.map(m => <option key={m} value={m} />)}</datalist></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約<textarea rows={4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder="本の要約" /></label></div></div>
     <div className="links-section"><div className="section-title"><div><h3>関連リンク</h3><p>表示名は候補から選ぶか入力します。左端の <GripVertical className="inline-icon" /> をドラッグして並べ替えられます。URLが空の欄は保存されません。</p>{duplicate?.reason === 'url' && <p className="field-error">同じURLのリンクが「{duplicate.book.title}」に登録されています</p>}</div><button type="button" className="secondary-btn" onClick={addLink}><Plus /> リンクを追加</button></div><LinkEditor links={draft.links} onChange={links => update('links', links)} /></div>
     <div className="modal-actions">{!isNew && <button type="button" className="danger-btn" onClick={() => onDelete(draft.id)}><Trash2 /> 削除</button>}<span /><button type="button" className="ghost-btn" onClick={onClose}>キャンセル</button><button className="primary-btn" disabled={Boolean(duplicate)}>{isNew ? '本を登録する' : '変更を保存'}</button></div>
   </form></section></div>

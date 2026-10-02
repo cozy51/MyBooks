@@ -47,3 +47,16 @@ export async function authorized(request: Request): Promise<boolean> {
   verified.set(token, Date.now() + Math.min(Number(info.expires_in) || 0, 600) * 1000)
   return true
 }
+
+/** 試すGeminiのモデル（指定があればそれを先に。gemini-flash-latest は常に最新のFlashを指す）。404のときは次を試す */
+export const geminiModels = (preferred?: string) => [...new Set([preferred?.trim(), 'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-3.5-flash'].filter((m): m is string => Boolean(m)))]
+
+/** 制限時間つきの fetch（時間切れは 504 として扱う） */
+export async function fetchBefore(deadline: number, url: string, init: RequestInit = {}): Promise<Response> {
+  const remaining = deadline - Date.now()
+  if (remaining <= 1000) throw new UpstreamError(504, 'timeout')
+  try { return await fetch(url, { ...init, signal: AbortSignal.timeout(remaining) }) } catch (e) {
+    if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) throw new UpstreamError(504, 'timeout')
+    throw e
+  }
+}

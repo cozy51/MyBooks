@@ -1,16 +1,22 @@
 import type { BookLink } from './types'
 
+/** 全ページスキャン。表示名は固定で、関連リンクの先頭に置く（要約の作成にも使う） */
+export const SCAN_LABEL = '全ページスキャン'
 /** 関連リンクの名前の候補。新しい本・編集画面には、この順で最初から欄を用意する */
-export const LINK_PRESETS = ['インフォグラフィック', '音声解説', '動画解説', '全ページスキャン', 'GeminiNotebookスライド']
+export const LINK_PRESETS = [SCAN_LABEL, 'インフォグラフィック', '音声解説', '動画解説', 'GeminiNotebookスライド']
 /** カードに表示するリンクの最大数 */
 export const CARD_LINK_LIMIT = 6
 
 export const newLink = (label = ''): BookLink => ({ id: crypto.randomUUID(), label, url: '' })
 
-/** 編集用：まだ無い候補の欄を末尾に追加する */
+export const isScan = (link: BookLink) => link.label.trim() === SCAN_LABEL
+/** 全ページスキャンを先頭に（ほかのリンクの順番はそのまま） */
+export const scanFirst = (links: BookLink[]) => [...links.filter(isScan), ...links.filter(l => !isScan(l))]
+
+/** 編集用：まだ無い候補の欄を末尾に追加する（全ページスキャンは先頭） */
 export function withPresetRows(links: BookLink[]): BookLink[] {
   const labels = new Set(links.map(l => l.label.trim()))
-  return [...links.map(l => ({ ...l })), ...LINK_PRESETS.filter(p => !labels.has(p)).map(newLink)]
+  return scanFirst([...links.map(l => ({ ...l })), ...LINK_PRESETS.filter(p => !labels.has(p)).map(newLink)])
 }
 
 // URLに使える文字（半角英数字と記号）だけを対象にする。日本語や空白はURLの外とみなす
@@ -28,7 +34,7 @@ export function sanitizeUrlInput(value: string): string | null {
 
 /** 保存用：URLが空・URLとして正しくない欄を取り除く */
 export function cleanLinks(links: BookLink[]): BookLink[] {
-  return links.map(l => ({ id: l.id, label: l.label.trim(), url: l.url.trim() })).filter(l => isUrl(l.url))
+  return scanFirst(links.map(l => ({ id: l.id, label: l.label.trim(), url: l.url.trim() })).filter(l => isUrl(l.url)))
 }
 
 

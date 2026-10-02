@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, ScanText, Search, Settings, Sparkles, Trash2, Upload, UserRound, X } from 'lucide-react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, ScanText, Undo2, Search, Settings, Sparkles, Trash2, Upload, UserRound, X } from 'lucide-react'
 import { COVER_FOLDER_ID, COVER_FOLDER_URL, driveFileId, driveFileUrl, normalizeCover } from './cover'
 import { categories, sampleBooks, statusClass } from './data'
 import { CoverImage, type Zoom } from './CoverImage'
@@ -80,6 +80,37 @@ function App() {
   const storeBooks = useCallback((books: Book[]) => { const next = withCoverIds(books); setBooks(next); localStorage.setItem(STORE, JSON.stringify(next)) }, [])
   const drive = useDriveSync(STORE, books, storeBooks)
   const saveBooks = (next: Book[]) => { storeBooks(next); drive.markDirty() }
+  // 画面下の短いお知らせ（数秒で消える）
+  const [notices, setNotices] = useState<{ id: number; text: string; error?: boolean }[]>([])
+  const notify = (text: string, error = false) => {
+    const id = Date.now() + Math.random()
+    setNotices(n => [...n, { id, text, error }])
+    setTimeout(() => setNotices(n => n.filter(x => x.id !== id)), error ? 12000 : 8000)
+  }
+  // 全ページスキャンからの要約は時間がかかるので、本の詳細画面を閉じても続ける（本ごとに1つ）
+  const [summaryJobs, setSummaryJobs] = useState<ReadonlyMap<string, SummaryJob>>(new Map())
+  const booksRef = useRef(books)
+  const editingRef = useRef(editing)
+  useEffect(() => { booksRef.current = books; editingRef.current = editing })
+  const dropJob = (id: string) => setSummaryJobs(m => { const next = new Map(m); next.delete(id); return next })
+  const startSummary = (book: Pick<Book, 'id' | 'title' | 'author'>, scanUrl: string) => {
+    if (summaryJobs.get(book.id)?.status === 'running') return
+    const job: SummaryJob = { startedAt: Date.now(), status: 'running' }
+    setSummaryJobs(m => new Map(m).set(book.id, job))
+    const title = book.title.trim() || 'タイトル未入力の本'
+    summarizeScan(scanUrl, book.title.trim(), book.author.trim()).then(summary => {
+      // 詳細画面で開いていれば編集中の要約欄に入れる。閉じていれば、その本の要約として保存する
+      if (editingRef.current?.id === book.id) { setSummaryJobs(m => new Map(m).set(book.id, { ...job, status: 'done', summary })); return }
+      dropJob(book.id)
+      const latest = booksRef.current
+      if (!latest.some(b => b.id === book.id)) return notify(`「${title}」の要約はできましたが、本が保存されていないため反映できませんでした`, true)
+      saveBooks(latest.map(b => b.id === book.id ? { ...b, memo: summary, updatedAt: new Date().toISOString() } : b))
+      notify(`「${title}」の要約を作成して保存しました`)
+    }, (e: unknown) => {
+      dropJob(book.id)
+      notify(`「${title}」の要約を作成できませんでした：${e instanceof Error ? e.message : String(e)}`, true)
+    })
+  }
   // 基準月の候補（今月と、登録済みの本で使っている月を新しい順に）
   const monthOptions = useMemo(() => [...new Set([new Date().toISOString().slice(0, 7), ...books.map(b => b.baseMonth).filter(Boolean)])].sort().reverse(), [books])
   const filtered = useMemo(() => books.filter(book => {
@@ -149,13 +180,14 @@ function App() {
       {view === 'map' && books.length > 0 ? <Suspense fallback={<div className="book-map panel map-loading"><LoaderCircle className="spin" /> マップを準備しています…</div>}>
         <BookMap books={books} visibleIds={filteredIds} category={category} onCategory={setCategory} onSelect={openBook} driveStatus={drive.status} onConnect={() => void drive.connect()} />
       </Suspense> : filtered.length === 0 ? <Empty onAdd={() => openBook(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
-        <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
+        <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} summarizing={summaryJobs.get(book.id)?.status === 'running'} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
         <BookTable books={pageBooks} startNo={pageStart + 1} onSelect={openBook} />}
       {paged && <Pager className="pager-bottom" page={page} pageCount={pageCount} onChange={goPage} />}
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
+    {notices.length > 0 && <div className="notices" role="status">{notices.map(n => <p key={n.id} className={n.error ? 'error' : undefined}>{n.error ? <CloudAlert /> : <Check />}{n.text}<button type="button" aria-label="閉じる" onClick={() => setNotices(list => list.filter(x => x.id !== n.id))}><X /></button></p>)}</div>}
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
-    {editing && <BookModal key={editing.id} book={editing} books={books} tab={modalTab} onTab={setModalTab} onOpen={setEditing} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(open ?? null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
+    {editing && <BookModal key={editing.id} book={editing} books={books} summaryJob={summaryJobs.get(editing.id)} onSummarize={startSummary} onSummaryApplied={() => dropJob(editing.id)} tab={modalTab} onTab={setModalTab} onOpen={setEditing} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(open ?? null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>
@@ -174,9 +206,9 @@ function CoverLightbox({ src, alt, onClose }: Zoom & { onClose: () => void }) {
 }
 
 function categoryPath(id: string) { const child = categories.find(c => c.id === id); const parent = categories.find(c => c.id === child?.parent); return { child, parent } }
-function BookCard({ no, book, onClick, onZoom }: { no: number; book: Book; onClick: () => void; onZoom: (z: Zoom) => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
+function BookCard({ no, book, summarizing, onClick, onZoom }: { no: number; book: Book; summarizing?: boolean; onClick: () => void; onZoom: (z: Zoom) => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
   <div className="cover-wrap"><CoverImage src={book.cover} alt={`${book.title}の表紙`} onZoom={onZoom} fallback={<div className="cover-placeholder"><BookOpen /><span>NO COVER</span></div>} /></div>
-  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><AuthorName author={book.author} />{book.memo.trim() && <CopySummaryButton text={book.memo} />}<span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left"><span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{book.baseMonth && <span>{book.baseMonth.replace('-', '年')}月</span>}</span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div><CardLinks links={book.links} /></div>
+  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><AuthorName author={book.author} />{book.memo.trim() && <CopySummaryButton text={book.memo} />}<span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left"><span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{summarizing && <span className="summary-busy" title="全ページスキャンから要約を作成しています"><LoaderCircle className="spin" />要約作成中</span>}{book.baseMonth && <span>{book.baseMonth.replace('-', '年')}月</span>}</span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div><CardLinks links={book.links} /></div>
 </article> }
 
 /** 著者名。登録済みは人物アイコン付きで濃く、未登録は薄い点線のラベルにして区別しやすくする */
@@ -206,16 +238,20 @@ const canPasteCover = Boolean(DRIVE_CLIENT_ID)
 type ModalTab = 'edit' | 'similar' | 'author'
 
 /** 処理中の経過秒数（止まっていないことが分かるように表示する） */
-function useElapsed(active: boolean) {
+function useElapsed(active: boolean, since?: number) {
   const [elapsed, setElapsed] = useState(0)
   useEffect(() => {
     if (!active) return
-    const started = Date.now()
-    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000)
+    const started = since ?? Date.now()
+    const tick = () => setElapsed(Math.floor((Date.now() - started) / 1000))
+    const timer = setInterval(tick, 1000)
     return () => { clearInterval(timer); setElapsed(0) }
-  }, [active])
+  }, [active, since])
   return elapsed
 }
+
+/** 全ページスキャンからの要約の処理（done: できあがったが、まだ詳細画面に反映していない） */
+interface SummaryJob { startedAt: number; status: 'running' | 'done'; summary?: string }
 
 /** 自動で入力した項目の記録（before: 入力前の値 / changed: 値が変わったか / source: 表紙・スキャンのどちらから） */
 interface Filled { before: string; changed: boolean; source: 'cover' | 'scan' }
@@ -225,7 +261,7 @@ const FILL_LABEL = { title: 'タイトル', author: '著者', categoryId: '分�
 const categoryLabel = (id: string) => categories.find(c => c.id === id)?.name ?? id
 
 /** onSave の open: 保存したあとに続けて開く本（類似する本・同じ著者の本から選んだとき） */
-function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; books: Book[]; tab: ModalTab; onTab: (t: ModalTab) => void; onOpen: (b: Book) => void; monthOptions: string[]; onClose: () => void; onSave: (b: Book, open?: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
+function BookModal({ book, books, summaryJob, onSummarize, onSummaryApplied, tab, onTab, onOpen, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; books: Book[]; summaryJob?: SummaryJob; onSummarize: (b: Book, scanUrl: string) => void; onSummaryApplied: () => void; tab: ModalTab; onTab: (t: ModalTab) => void; onOpen: (b: Book) => void; monthOptions: string[]; onClose: () => void; onSave: (b: Book, open?: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
   const isNew = !book.title
   const [draft, setDraft] = useState<Book>({ ...book, links: withPresetRows(book.links) })
   // 表紙・スキャンから自動で入力した項目と、入力前の値（変更あり／なしの表示用。手で直すと目印を外す）
@@ -271,10 +307,7 @@ function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onS
     const read: Partial<Pick<Book, 'title' | 'author' | 'categoryId'>> = { ...(info.title && { title: info.title }), ...(info.author && { author: info.author }), ...(category && { categoryId: category.id }) }
     const keys = Object.keys(read) as (keyof typeof read)[]
     if (!keys.length) { setReadNote('表紙から読み取れる文字がありませんでした。'); return }
-    // 入力済みの内容と違うときは確認する（新しい本の分類は前回の分類が入っているだけなので確認しない）
-    const label = (key: keyof typeof read, value: string) => key === 'categoryId' ? categoryLabel(value) : value
-    const overwrite = keys.filter(key => draft[key].trim() && read[key] !== draft[key].trim() && !(key === 'categoryId' && isNew))
-    if (overwrite.length && !confirm(`表紙から読み取った内容で上書きしますか？\n\n${overwrite.map(key => `${FILL_LABEL[key]}：${label(key, draft[key])} → ${label(key, read[key]!)}`).join('\n')}`)) return
+    // 確認せずに入力し、変更した項目には変更前の値と「元に戻す」を表示する
     setDraft(d => ({ ...d, ...read }))
     const changed = keys.filter(key => read[key] !== draft[key].trim())
     const same = keys.filter(key => !changed.includes(key))
@@ -291,18 +324,23 @@ function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onS
   }
   // 全ページスキャンのリンク先から要約を作る
   const scanUrl = draft.links.find(l => isScan(l) && isUrl(l.url.trim()))?.url.trim()
-  const [summarizing, setSummarizing] = useState(false)
-  const summarizeElapsed = useElapsed(summarizing)
-  const makeSummary = async () => {
+  // 処理は App 側で続くので、この画面を閉じても止まらない（閉じている間に終われば、その本に保存される）
+  const summarizing = summaryJob?.status === 'running'
+  const summarizeElapsed = useElapsed(summarizing, summaryJob?.startedAt)
+  const makeSummary = () => {
     if (!scanUrl || summarizing) return
-    if (draft.memo.trim() && !confirm('全ページスキャンから作った要約で、今の要約を置き換えますか？')) return
-    setSummarizing(true)
-    try {
-      const summary = await summarizeScan(scanUrl, draft.title.trim(), draft.author.trim())
-      setDraft(d => ({ ...d, memo: summary }))
-      setFilled(f => new Map(f).set('memo', { before: draft.memo, changed: summary.trim() !== draft.memo.trim(), source: 'scan' }))
-    } catch (e) { alert(e instanceof Error ? e.message : String(e)) } finally { setSummarizing(false) }
+    if (draft.memo.trim() && !confirm('全ページスキャンから作った要約で、今の要約を置き換えますか？\n（時間がかかるので、この画面は閉じてもかまいません。終わると自動で保存されます）')) return
+    onSummarize(draft, scanUrl)
   }
+  // この画面を開いている間にできあがった要約は、要約欄に入れて確認できるようにする
+  const [appliedJob, setAppliedJob] = useState<SummaryJob>()
+  if (summaryJob?.status === 'done' && summaryJob.summary && summaryJob !== appliedJob) {
+    const summary = summaryJob.summary
+    setAppliedJob(summaryJob)
+    setDraft(d => ({ ...d, memo: summary }))
+    setFilled(f => new Map(f).set('memo', { before: draft.memo, changed: summary.trim() !== draft.memo.trim(), source: 'scan' }))
+  }
+  useEffect(() => { if (summaryJob?.status === 'done' && summaryJob === appliedJob) onSummaryApplied() }, [summaryJob, appliedJob, onSummaryApplied])
   // 変更した項目は紫、読み取り結果と同じで変更しなかった項目は緑で示す
   const fill = (key: keyof Book) => { const f = filled.get(key); return f && (f.changed ? 'autofilled' : 'autofilled same') }
   const fillMark = (key: keyof Book) => {
@@ -313,7 +351,9 @@ function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onS
   const fillBefore = (key: 'title' | 'author' | 'categoryId' | 'memo') => {
     const f = filled.get(key); if (!f?.changed) return null
     const before = key === 'categoryId' ? categoryLabel(f.before) : f.before.trim()
-    return <small className="fill-before">変更前：{before ? (before.length > 60 ? `${before.slice(0, 60)}…` : before) : '（空欄）'}</small>
+    const shown = key === 'memo' && before.length > 120 ? `${before.slice(0, 120)}…` : before
+    return <span className="fill-before"><b>変更前</b>{before ? <s title={before}>{shown}</s> : <em>（空欄）</em>}
+      <button type="button" onClick={e => { e.preventDefault(); update(key, f.before) }} title="変更前の内容に戻します"><Undo2 />元に戻す</button></span>
   }
   const onPaste = (e: React.ClipboardEvent) => {
     const image = canPasteCover ? Array.from(e.clipboardData.files).find(f => f.type.startsWith('image/')) : undefined
@@ -348,7 +388,7 @@ function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onS
       : <div className="cover-placeholder"><BookOpen /><span>{draft.cover ? '表示できません' : '表紙プレビュー'}</span></div>} /><div className="cover-fields"><label>表紙（DriveのファイルID）<input value={draft.cover} onChange={e => update('cover', normalizeCover(e.target.value))} placeholder="ファイルID・共有リンク・画像URL" /></label>
       <div className="cover-actions">{canPasteCover && <button type="button" className="secondary-btn" onClick={() => void pasteCover()} disabled={uploading}>{uploading ? <LoaderCircle className="spin" /> : <ClipboardPaste />} {uploading ? 'アップロード中…' : '画像を貼り付け'}</button>}{canPickCover && <button type="button" className="secondary-btn" onClick={pickCover}><FolderOpen /> Driveから選ぶ</button>}<a href={driveFileUrl(draft.cover) ?? COVER_FOLDER_URL} target="_blank" rel="noreferrer"><ExternalLink />{driveFileUrl(draft.cover) ? 'Driveで開く' : '表紙フォルダを開く'}</a></div>
       <small className="cover-hint">{canPasteCover && 'コピーした画像は、表紙フォルダに「タイトル名」のファイルとして保存されます（Ctrl+Vでも可）。'}表紙フォルダの画像はファイルIDで保存します。共有リンクを貼るとIDに変換されます。表示するには、フォルダの共有設定を「リンクを知っている全員」にしてください。</small></div></div>
-    <div className="fields"><div className="autofill-bar"><button type="button" className="autofill-btn" onClick={() => void readCover()} disabled={reading} title="表紙の画像の文字を読み取り、タイトル・著者・分類を入力します">{reading ? <LoaderCircle className="spin" /> : <ScanText />}{reading ? `読み取り中…${elapsed ? ` ${elapsed}秒` : ''}` : '表紙から入力'}</button><span>タイトル・著者・分類を表紙の画像から読み取ります</span>{readNote && <small className="field-note">{readNote}</small>}</div><label>タイトル <em>必須</em>{fillMark('title')}<input className={duplicate ? 'invalid' : fill('title')} required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" />{fillBefore('title')}{duplicate && <small className="field-error">{duplicate.reason === 'url' ? '同じURLの関連リンクを持つ本' : '同じ本'}がすでに登録されています（{duplicate.book.title}{duplicate.book.author && ` / ${duplicate.book.author}`}）</small>}</label><label>著者{fillMark('author')}<input className={fill('author')} value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" />{fillBefore('author')}</label><div className="field-row"><label>分類{fillMark('categoryId')}<select className={fill('categoryId')} value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select>{fillBefore('categoryId')}</label><label>基準月<input className={monthError ? 'invalid' : undefined} list="base-month-options" inputMode="numeric" autoComplete="off" placeholder="YYYY-MM（空欄可）" value={draft.baseMonth} onChange={e => { update('baseMonth', e.target.value); setMonthError(false) }} onBlur={fixMonth} />{monthError && <small className="field-error">YYYY-MM の形式で入力してください（例：2026-09）</small>}<datalist id="base-month-options">{monthOptions.map(m => <option key={m} value={m} />)}</datalist></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約{!filled.has('memo') && <button type="button" className="label-action" onClick={() => void makeSummary()} disabled={!scanUrl || summarizing} title={scanUrl ? '関連リンクの「全ページスキャン」のファイルを読み、要約を作ります' : '関連リンクの「全ページスキャン」にURLを入れると使えます'}>{summarizing ? <LoaderCircle className="spin" /> : <Sparkles />}{summarizing ? `要約を作成中…${summarizeElapsed ? ` ${summarizeElapsed}秒` : ''}` : '全ページスキャンから要約'}</button>}{fillMark('memo')}<textarea className={fill('memo')} rows={filled.has('memo') ? 8 : 4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder="本の要約" disabled={summarizing} />{fillBefore('memo')}</label></div></div>
+    <div className="fields"><div className="autofill-bar"><button type="button" className="autofill-btn" onClick={() => void readCover()} disabled={reading} title="表紙の画像の文字を読み取り、タイトル・著者・分類を入力します">{reading ? <LoaderCircle className="spin" /> : <ScanText />}{reading ? `読み取り中…${elapsed ? ` ${elapsed}秒` : ''}` : '表紙から入力'}</button><span>タイトル・著者・分類を表紙の画像から読み取ります</span>{readNote && <small className="field-note">{readNote}</small>}</div><label>タイトル <em>必須</em>{fillMark('title')}<input className={duplicate ? 'invalid' : fill('title')} required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" />{fillBefore('title')}{duplicate && <small className="field-error">{duplicate.reason === 'url' ? '同じURLの関連リンクを持つ本' : '同じ本'}がすでに登録されています（{duplicate.book.title}{duplicate.book.author && ` / ${duplicate.book.author}`}）</small>}</label><label>著者{fillMark('author')}<input className={fill('author')} value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" />{fillBefore('author')}</label><div className="field-row"><label>分類{fillMark('categoryId')}<select className={fill('categoryId')} value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select>{fillBefore('categoryId')}</label><label>基準月<input className={monthError ? 'invalid' : undefined} list="base-month-options" inputMode="numeric" autoComplete="off" placeholder="YYYY-MM（空欄可）" value={draft.baseMonth} onChange={e => { update('baseMonth', e.target.value); setMonthError(false) }} onBlur={fixMonth} />{monthError && <small className="field-error">YYYY-MM の形式で入力してください（例：2026-09）</small>}<datalist id="base-month-options">{monthOptions.map(m => <option key={m} value={m} />)}</datalist></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約{!filled.has('memo') && <button type="button" className="label-action" onClick={makeSummary} disabled={!scanUrl || summarizing} title={scanUrl ? '関連リンクの「全ページスキャン」のファイルを読み、要約を作ります' : '関連リンクの「全ページスキャン」にURLを入れると使えます'}>{summarizing ? <LoaderCircle className="spin" /> : <Sparkles />}{summarizing ? `要約を作成中…${summarizeElapsed ? ` ${summarizeElapsed}秒` : ''}` : '全ページスキャンから要約'}</button>}{fillMark('memo')}<textarea className={fill('memo')} rows={filled.has('memo') ? 8 : 4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder={summarizing ? '全ページスキャンから要約を作成しています…' : '本の要約'} disabled={summarizing} />{summarizing && <small className="field-note">要約の作成には数十秒〜数分かかります。この画面を閉じても処理は続き、終わると自動で保存されます。</small>}{fillBefore('memo')}</label></div></div>
     <div className="links-section"><div className="section-title"><div><h3>関連リンク</h3><p>表示名は候補から選ぶか入力します。左端の <GripVertical className="inline-icon" /> をドラッグして並べ替えられます。URLが空の欄は保存されません。</p>{duplicate?.reason === 'url' && <p className="field-error">同じURLのリンクが「{duplicate.book.title}」に登録されています</p>}</div><button type="button" className="secondary-btn" onClick={addLink}><Plus /> リンクを追加</button></div><LinkEditor links={draft.links} onChange={links => update('links', links)} /></div>
     <div className="modal-actions">{!isNew && <button type="button" className="danger-btn" onClick={() => onDelete(draft.id)}><Trash2 /> 削除</button>}<span /><button type="button" className="ghost-btn" onClick={onClose}>キャンセル</button><button className="primary-btn" disabled={Boolean(duplicate)}>{isNew ? '本を登録する' : '変更を保存'}</button></div>
   </form></section></div>

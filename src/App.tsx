@@ -1,11 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, Search, Settings, Trash2, Upload, X } from 'lucide-react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, Search, Settings, Sparkles, Trash2, Upload, UserRound, X } from 'lucide-react'
 import { COVER_FOLDER_ID, COVER_FOLDER_URL, driveFileId, driveFileUrl, normalizeCover } from './cover'
 import { categories, sampleBooks, statusClass } from './data'
 import { CoverImage, type Zoom } from './CoverImage'
 import { DATA_FOLDER_URL, DRIVE_API_KEY, DRIVE_CLIENT_ID, DRIVE_FILE_NAME, pickImage, readClipboardImage, uploadCoverImage } from './drive'
 import { useDriveSync, type SyncStatus } from './useDriveSync'
 import { CardLinks, LinkEditor } from './LinkEditor'
+import { SameAuthorBooks, SimilarBooks } from './RelatedBooks'
 import { cleanLinks, newLink, withPresetRows } from './links'
 import type { Book, BookLink, ReadingStatus } from './types'
 
@@ -68,6 +69,8 @@ function App() {
   const [status, setStatus] = useState('all')
   const [view, setView] = useState<'cards' | 'table' | 'map'>('cards')
   const [editing, setEditing] = useState<Book | null>(null)
+  const [modalTab, setModalTab] = useState<ModalTab>('edit')
+  const openBook = (book: Book | null) => { setModalTab('edit'); setEditing(book) }
   const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null)
   const [backupOpen, setBackupOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -125,7 +128,7 @@ function App() {
   return <div className="app-shell">
     <header className="topbar">
       <button className="brand" onClick={() => { setQuery(''); setCategory('all'); setStatus('all') }}><img className="brandmark" src="/favicon.svg" alt="" /><span>MyBooks<small>わたしの本棚</small></span></button>
-      <div className="header-actions"><button className={`ghost-btn backup-label sync-${drive.status}`} onClick={() => setBackupOpen(true)} title={syncLabel[drive.status]}><SyncIcon status={drive.status} /><span>{syncLabel[drive.status]}</span></button><button className="primary-btn" onClick={() => setEditing(emptyBook())}><Plus /> 本を追加</button><button className="avatar" aria-label="設定"><Settings /></button></div>
+      <div className="header-actions"><button className={`ghost-btn backup-label sync-${drive.status}`} onClick={() => setBackupOpen(true)} title={syncLabel[drive.status]}><SyncIcon status={drive.status} /><span>{syncLabel[drive.status]}</span></button><button className="primary-btn" onClick={() => openBook(emptyBook())}><Plus /> 本を追加</button><button className="avatar" aria-label="設定"><Settings /></button></div>
     </header>
 
     <main>
@@ -142,15 +145,15 @@ function App() {
 
       {paged && <Pager page={page} pageCount={pageCount} onChange={goPage} />}
       {view === 'map' && books.length > 0 ? <Suspense fallback={<div className="book-map panel map-loading"><LoaderCircle className="spin" /> マップを準備しています…</div>}>
-        <BookMap books={books} visibleIds={filteredIds} category={category} onCategory={setCategory} onSelect={setEditing} driveStatus={drive.status} onConnect={() => void drive.connect()} />
-      </Suspense> : filtered.length === 0 ? <Empty onAdd={() => setEditing(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
-        <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} onClick={() => setEditing(book)} onZoom={setZoomed} />)}</div> :
-        <BookTable books={pageBooks} startNo={pageStart + 1} onSelect={setEditing} />}
+        <BookMap books={books} visibleIds={filteredIds} category={category} onCategory={setCategory} onSelect={openBook} driveStatus={drive.status} onConnect={() => void drive.connect()} />
+      </Suspense> : filtered.length === 0 ? <Empty onAdd={() => openBook(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
+        <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
+        <BookTable books={pageBooks} startNo={pageStart + 1} onSelect={openBook} />}
       {paged && <Pager className="pager-bottom" page={page} pageCount={pageCount} onChange={goPage} />}
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
-    {editing && <BookModal book={editing} books={books} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={book => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
+    {editing && <BookModal key={editing.id} book={editing} books={books} tab={modalTab} onTab={setModalTab} onOpen={setEditing} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); setEditing(open ?? null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>
@@ -191,7 +194,10 @@ function Empty({ onAdd, hasBooks }: { onAdd: () => void; hasBooks: boolean }) { 
 const canPickCover = Boolean(DRIVE_CLIENT_ID && DRIVE_API_KEY)
 const canPasteCover = Boolean(DRIVE_CLIENT_ID)
 
-function BookModal({ book, books, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; books: Book[]; monthOptions: string[]; onClose: () => void; onSave: (b: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
+type ModalTab = 'edit' | 'similar' | 'author'
+
+/** onSave の open: 保存したあとに続けて開く本（類似する本・同じ著者の本から選んだとき） */
+function BookModal({ book, books, tab, onTab, onOpen, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; books: Book[]; tab: ModalTab; onTab: (t: ModalTab) => void; onOpen: (b: Book) => void; monthOptions: string[]; onClose: () => void; onSave: (b: Book, open?: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
   const isNew = !book.title
   const [draft, setDraft] = useState<Book>({ ...book, links: withPresetRows(book.links) })
   const update = <K extends keyof Book>(key: K, value: Book[K]) => setDraft(d => ({ ...d, [key]: value }))
@@ -226,17 +232,23 @@ function BookModal({ book, books, monthOptions, onClose, onSave, onDelete, onZoo
   const fixMonth = () => { const month = normalizeMonth(draft.baseMonth); setMonthError(month === null); if (month !== null) update('baseMonth', month); return month }
   const submit = (e: React.FormEvent) => { e.preventDefault(); if (!draft.title.trim() || duplicate) return; const baseMonth = fixMonth(); if (baseMonth === null) return; onSave(finalize({ ...draft, baseMonth })) }
   // 外側のクリックや×で閉じるときは、今の内容を保存してから閉じる（表紙のアップロード中なら完了を待つ）
-  const saveAndClose = async () => {
+  // 別の本を開くとき（open）も、今の本の変更を保存してから切り替える
+  const saveAndClose = async (open?: Book) => {
     if (closingRef.current) return
     closingRef.current = true
     let current = draft
     if (uploadRef.current) { const id = await uploadRef.current.catch(() => null); if (id) current = { ...current, cover: id } }
     const same = (a: Book, b: Book) => JSON.stringify({ ...finalize(a), updatedAt: '' }) === JSON.stringify({ ...finalize(b), updatedAt: '' })
-    if (!current.title.trim() || same(current, book)) onClose()
+    if (!current.title.trim() || same(current, book)) { if (open) onOpen(open); else onClose() }
     else if (findDuplicate(books, current)) { closingRef.current = false; alert('同じ本（タイトルまたは関連リンクのURLが同じ本）がすでに登録されているため保存できません。内容を変えるか、キャンセルで閉じてください。') }
-    else onSave(finalize(current))
+    else onSave(finalize(current), open)
   }
-  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) void saveAndClose() }}><section className="modal" onPaste={onPaste}><div className="modal-head"><div><p className="eyebrow">{isNew ? 'NEW BOOK' : 'BOOK DETAILS'}</p><h2>{isNew ? '本を追加' : '本の詳細・編集'}</h2></div><button className="icon-btn" onClick={() => void saveAndClose()} title="保存して閉じる"><X /></button></div><form onSubmit={submit}>
+  const openRelated = (b: Book) => void saveAndClose(b)
+  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) void saveAndClose() }}><section className="modal" onPaste={onPaste}><div className="modal-head"><div><p className="eyebrow">{isNew ? 'NEW BOOK' : 'BOOK DETAILS'}</p><h2>{isNew ? '本を追加' : '本の詳細・編集'}</h2></div>
+    <div className="modal-tabs" role="tablist">{([['edit', <><BookOpen /> 詳細・編集</>], ['similar', <><Sparkles /> 類似する本</>], ['author', <><UserRound /> 同じ著者の本</>]] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => onTab(id)}>{label}</button>)}</div>
+    <button className="icon-btn" onClick={() => void saveAndClose()} title="保存して閉じる"><X /></button></div>{tab === 'similar' && <div className="related-panel"><SimilarBooks book={book} books={books} onOpen={openRelated} /></div>}
+    {tab === 'author' && <div className="related-panel"><SameAuthorBooks book={{ ...book, author: draft.author }} books={books} onOpen={openRelated} /></div>}
+    <form onSubmit={submit} hidden={tab !== 'edit'}>
     <div className="form-layout"><div className="cover-editor"><CoverImage src={draft.cover} alt={`${draft.title || '表紙'}のプレビュー`} onZoom={onZoom} fallback={canPasteCover
       ? <button type="button" className="cover-placeholder paste-target" onClick={() => void pasteCover()} disabled={uploading} title="クリップボードの画像を表紙として保存">{uploading ? <><LoaderCircle className="spin" /><span>アップロード中…</span></> : <><ClipboardPaste /><span>{draft.cover ? '表示できません' : 'クリックして'}<br />クリップボードの<br />画像を貼り付け</span></>}</button>
       : <div className="cover-placeholder"><BookOpen /><span>{draft.cover ? '表示できません' : '表紙プレビュー'}</span></div>} /><div className="cover-fields"><label>表紙（DriveのファイルID）<input value={draft.cover} onChange={e => update('cover', normalizeCover(e.target.value))} placeholder="ファイルID・共有リンク・画像URL" /></label>

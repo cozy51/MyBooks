@@ -46,8 +46,8 @@ interface DocsView { setParent(id: string): DocsView; setIncludeFolders(v: boole
 interface PickerNamespace {
   PickerBuilder: new () => PickerBuilder
   DocsView: new (viewId?: string) => DocsView
-  ViewId: { DOCS_IMAGES: string; FOLDERS: string }
-  DocsViewMode: { GRID: string }
+  ViewId: { DOCS: string; DOCS_IMAGES: string; FOLDERS: string }
+  DocsViewMode: { GRID: string; LIST: string }
   Action: { PICKED: string; CANCEL: string }
 }
 
@@ -186,6 +186,18 @@ export async function grantFolderAccess(folderId = DATA_FOLDER_ID, label = 'MyBo
   })
   if (id === null) return false
   if (id !== folderId) throw new Error(`選んだフォルダが「${label}」フォルダではありません。もう一度お試しください`)
+  return true
+}
+
+/** ファイルをPickerで選んでもらい、このアプリにそのファイルの読み取りを許可する（drive.file スコープのため） */
+export async function grantFileAccess(fileId: string, label: string): Promise<boolean> {
+  if (!DRIVE_API_KEY || !DRIVE_APP_ID) throw new Error('ファイルの許可には VITE_GOOGLE_API_KEY と VITE_GOOGLE_APP_ID の設定が必要です（READMEを参照）')
+  const id = await openPicker(picker => {
+    const view = new picker.DocsView(picker.ViewId.DOCS).setIncludeFolders(false).setMode(picker.DocsViewMode.LIST)
+    return { view: view.setFileIds?.(fileId) ?? view, title: `「${label}」のファイルを選んで「選択」を押してください` }
+  })
+  if (id === null) return false
+  if (id !== fileId) throw new Error(`選んだファイルが「${label}」のファイルではありません。もう一度お試しください`)
   return true
 }
 

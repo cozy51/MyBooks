@@ -1,5 +1,7 @@
 {
   "functions": {
-    "api/*.ts": { "maxDuration": 60 }
+    "api/embed.ts": { "maxDuration": 60 },
+    "api/cover-info.ts": { "maxDuration": 60 },
+    "api/summarize-scan.ts": { "maxDuration": 300 }
   }
 }

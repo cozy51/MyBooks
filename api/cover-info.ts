@@ -3,7 +3,7 @@
 //   VISION_MODEL … モデル名を変えるときだけ設定（既定: gemini-flash-latest / gpt-4.1-mini）
 // Geminiはモデルの提供終了・利用制限が早いため、見つからない（404）ときは候補を順に試す。
 // リクエスト: { image?: base64, mimeType?: string, cover?: DriveのファイルIDまたは画像URL, categories: { id, name }[] }
-import { authorized, notConfigured, provider, reply, unauthorized, upstreamFailure, UpstreamError, type Provider } from './_lib.js'
+import { authorized, fetchBefore, geminiModels, notConfigured, provider, reply, unauthorized, upstreamFailure, UpstreamError, type Provider } from './_lib.js'
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const DRIVE_ID = /^[\w-]{25,}$/
@@ -20,31 +20,18 @@ const instructions = (categories: Category[]) => `これは本の表紙の画像
 ${categories.map(c => `  ${c.id}: ${c.name}`).join('\n')}
 表紙が読み取れない場合は title を空文字にしてください。推測で文字を補わないでください。`
 
-/** 試すGeminiのモデル（指定があればそれを先に。gemini-flash-latest は常に最新のFlashを指す） */
-const geminiModels = () => [...new Set([process.env.VISION_MODEL?.trim(), 'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-3.5-flash'].filter((m): m is string => Boolean(m)))]
-
 /** 全体の制限時間（Vercelの実行上限60秒より短くし、必ず応答を返す） */
 const TIME_LIMIT = 50_000
 
 async function askGemini(p: Provider, image: string, mimeType: string, categories: Category[]): Promise<CoverInfo> {
   const deadline = Date.now() + TIME_LIMIT
-  for (const model of geminiModels()) {
+  for (const model of geminiModels(process.env.VISION_MODEL)) {
     try { return await askGeminiModel(p, model, image, mimeType, categories, deadline) } catch (e) {
       if (!(e instanceof UpstreamError && e.status === 404)) throw e
       console.warn(`vision model ${model} is not available`)
     }
   }
   throw new UpstreamError(404, 'no available vision model')
-}
-
-/** 制限時間つきの fetch（時間切れは 504 として扱う） */
-async function fetchBefore(deadline: number, url: string, init: RequestInit): Promise<Response> {
-  const remaining = deadline - Date.now()
-  if (remaining <= 1000) throw new UpstreamError(504, 'timeout')
-  try { return await fetch(url, { ...init, signal: AbortSignal.timeout(remaining) }) } catch (e) {
-    if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) throw new UpstreamError(504, 'timeout')
-    throw e
-  }
 }
 
 async function askGeminiModel(p: Provider, model: string, image: string, mimeType: string, categories: Category[], deadline: number, thinking = true): Promise<CoverInfo> {

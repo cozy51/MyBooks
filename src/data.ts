@@ -1,4 +1,7 @@
-import type { Book, Category } from './types'
+import type { Book, Category, ReadingStatus } from './types'
+
+/** 読書状況の表示用クラス名 */
+export const statusClass: Record<ReadingStatus, string> = { '未読': 'unread', '読書中': 'reading', '読了': 'done' }
 
 export const categories: Category[] = [
   { id: 'a', name: 'A. 機械工学' },

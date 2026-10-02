@@ -1,1 +1,1 @@
-{"compilerOptions":{"skipLibCheck":true,"module":"ESNext","moduleResolution":"Bundler","allowSyntheticDefaultImports":true,"noEmit":true,"tsBuildInfoFile":"./node_modules/.tmp/tsconfig.node.tsbuildinfo"},"include":["vite.config.ts"]}
+{"compilerOptions":{"target":"ES2022","lib":["ES2022","DOM"],"types":["node"],"skipLibCheck":true,"strict":true,"module":"ESNext","moduleResolution":"Bundler","allowSyntheticDefaultImports":true,"noEmit":true,"tsBuildInfoFile":"./node_modules/.tmp/tsconfig.node.tsbuildinfo"},"include":["vite.config.ts","api"]}

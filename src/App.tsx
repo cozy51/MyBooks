@@ -10,6 +10,8 @@ import { SameAuthorBooks, SimilarBooks } from './RelatedBooks'
 import { readCoverInfo, type CoverInfo } from './coverInfo'
 import { cleanLinks, isScan, isUrl, newLink, withPresetRows } from './links'
 import { summarizeScan } from './scanSummary'
+import { rankBooks, wantsSemantic } from './semanticSearch'
+import { useSemanticSearch } from './useSemanticSearch'
 import type { Book, BookLink, ReadingStatus } from './types'
 
 // 分類マップ（UMAPなど）は「マップ」を開いたときだけ読み込む
@@ -64,6 +66,13 @@ function loadBooks(): Book[] {
   try { const value = localStorage.getItem(STORE); return value ? withCoverIds(JSON.parse(value)) : sampleBooks } catch { return sampleBooks }
 }
 
+const SEMANTIC_KEY = 'mybooks-semantic-search'
+const DEBUG_KEY = 'mybooks-search-debug'
+const readFlag = (key: string, fallback: boolean) => { try { const v = localStorage.getItem(key); return v === null ? fallback : v === '1' } catch { return fallback } }
+const writeFlag = (key: string, value: boolean) => { try { localStorage.setItem(key, value ? '1' : '0') } catch { /* noop */ } }
+/** 検索結果の関連度（デバッグ表示用） */
+interface SearchScore { score: number; semantic?: number; keyword: number }
+
 function App() {
   const [books, setBooks] = useState<Book[]>(loadBooks)
   const [query, setQuery] = useState('')
@@ -79,6 +88,10 @@ function App() {
 
   const storeBooks = useCallback((books: Book[]) => { const next = withCoverIds(books); setBooks(next); localStorage.setItem(STORE, JSON.stringify(next)) }, [])
   const drive = useDriveSync(STORE, books, storeBooks)
+  // 意味検索（オン・オフと、開発確認用の関連度表示はこのブラウザに覚える。?debug を付けて開いても関連度を表示）
+  const [semanticOn, setSemanticOn] = useState(() => readFlag(SEMANTIC_KEY, true))
+  const [debug, setDebug] = useState(() => readFlag(DEBUG_KEY, false) || new URLSearchParams(location.search).has('debug'))
+  const semantic = useSemanticSearch(books, query, semanticOn, drive.status)
   const saveBooks = (next: Book[]) => { storeBooks(next); drive.markDirty() }
   // 画面下の短いお知らせ（数秒で消える）
   const [notices, setNotices] = useState<{ id: number; text: string; error?: boolean }[]>([])
@@ -113,13 +126,20 @@ function App() {
   }
   // 基準月の候補（今月と、登録済みの本で使っている月を新しい順に）
   const monthOptions = useMemo(() => [...new Set([new Date().toISOString().slice(0, 7), ...books.map(b => b.baseMonth).filter(Boolean)])].sort().reverse(), [books])
-  const filtered = useMemo(() => books.filter(book => {
-    const cat = categories.find(c => c.id === book.categoryId)
-    const parent = categories.find(c => c.id === cat?.parent)
-    const haystack = `${book.title} ${book.author} ${book.memo} ${cat?.name} ${parent?.name} ${book.baseMonth}`.toLowerCase()
-    const categoryMatch = category === 'all' || book.categoryId === category || cat?.parent === category
-    return haystack.includes(query.toLowerCase()) && categoryMatch && (status === 'all' || book.status === status)
-  }), [books, query, category, status])
+  // 分類・読書状況で絞り込んだうえで、キーワード検索（従来どおりの部分一致）または意味検索を組み合わせたハイブリッド検索で並べる
+  const semanticResult = semantic.state.status === 'ready' && semantic.state.query === query.trim() ? semantic.state.scores : null
+  const { filtered, scores } = useMemo(() => {
+    const candidates = books.filter(book => {
+      const cat = categories.find(c => c.id === book.categoryId)
+      return (category === 'all' || book.categoryId === category || cat?.parent === category) && (status === 'all' || book.status === status)
+    }).map(book => {
+      const { child, parent } = categoryPath(book.categoryId)
+      return { book, haystack: `${book.title} ${book.author} ${book.memo} ${child?.name} ${parent?.name} ${book.baseMonth}` }
+    })
+    if (!semanticResult) return { filtered: candidates.filter(c => c.haystack.toLowerCase().includes(query.toLowerCase())).map(c => c.book), scores: null }
+    const ranked = rankBooks(candidates, query, semanticResult)
+    return { filtered: ranked.map(r => r.book), scores: new Map<string, SearchScore>(ranked.map(r => [r.book.id, r])) }
+  }, [books, query, category, status, semanticResult])
   // 絞り込み条件が変わったら1ページ目に戻す（編集・追加では今のページのまま）
   const filterKey = `${query}\n${category}\n${status}`
   const [paging, setPaging] = useState({ key: filterKey, page: 1 })
@@ -169,19 +189,20 @@ function App() {
       <section className="welcome"><div><p className="eyebrow">MY PERSONAL LIBRARY</p><h1>本棚を、もっと身近に。</h1><p>{books.length}冊の本と、学びの記録をひとつの場所で管理しています。</p></div><div className="stat"><span>読書中</span><strong>{books.filter(b => b.status === '読書中').length}</strong><BookOpen /></div></section>
 
       <section className="toolbar panel">
-        <label className="search"><Search /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="タイトル、著者、分類、要約、基準月（YYYY-MM）から検索" />{query && <button onClick={() => setQuery('')}><X /></button>}</label>
+        <label className="search"><Search /><input value={query} onChange={e => setQuery(e.target.value)} placeholder={semanticOn ? 'タイトル、著者、キーワード、文章から意味検索' : 'タイトル、著者、分類、要約、基準月（YYYY-MM）から検索'} />{query && <button type="button" onClick={() => setQuery('')} aria-label="検索語を消す"><X /></button>}<button type="button" className={`semantic-toggle${semanticOn ? ' active' : ''}`} aria-pressed={semanticOn} onClick={e => { e.preventDefault(); setSemanticOn(!semanticOn); writeFlag(SEMANTIC_KEY, !semanticOn) }} title={semanticOn ? '意味検索：オン（押すとキーワード検索だけにします）' : '意味検索：オフ（押すと意味の近さでも検索します）'}><Sparkles /><span>意味検索</span></button></label>
         <select value={category} onChange={e => setCategory(e.target.value)} aria-label="分類で絞り込み"><option value="all">すべての分類</option>{categories.map(c => <option key={c.id} value={c.id}>{c.parent ? '　└ ' : ''}{c.name}</option>)}</select>
         <select value={status} onChange={e => setStatus(e.target.value)} aria-label="読書状況で絞り込み"><option value="all">すべての読書状況</option><option>未読</option><option>読書中</option><option>読了</option></select>
       </section>
+      {semanticOn && query.trim() && <SemanticStatus semantic={semantic} query={query} ranked={Boolean(scores)} driveStatus={drive.status} debug={debug} onDebug={v => { setDebug(v); writeFlag(DEBUG_KEY, v) }} onConnect={() => void drive.connect()} />}
 
-      <div className="content-heading" ref={headingRef}><div><h2>すべての本</h2><span>{paged ? `${filtered.length}冊中 ${pageStart + 1}〜${pageStart + pageBooks.length}冊を表示` : `${filtered.length}冊を表示`}</span></div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}><MapIcon /> マップ</button></div></div>
+      <div className="content-heading" ref={headingRef}><div><h2>{scores ? '意味の近い順' : 'すべての本'}</h2><span>{paged ? `${filtered.length}冊中 ${pageStart + 1}〜${pageStart + pageBooks.length}冊を表示` : `${filtered.length}冊を表示`}</span></div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}><MapIcon /> マップ</button></div></div>
 
       {paged && <Pager page={page} pageCount={pageCount} onChange={goPage} />}
       {view === 'map' && books.length > 0 ? <Suspense fallback={<div className="book-map panel map-loading"><LoaderCircle className="spin" /> マップを準備しています…</div>}>
         <BookMap books={books} visibleIds={filteredIds} category={category} onCategory={setCategory} onSelect={openBook} driveStatus={drive.status} onConnect={() => void drive.connect()} />
       </Suspense> : filtered.length === 0 ? <Empty onAdd={() => openBook(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
-        <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} summarizing={summaryJobs.get(book.id)?.status === 'running'} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
-        <BookTable books={pageBooks} startNo={pageStart + 1} onSelect={openBook} />}
+        <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} score={debug ? scores?.get(book.id) : undefined} summarizing={summaryJobs.get(book.id)?.status === 'running'} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
+        <BookTable books={pageBooks} startNo={pageStart + 1} scores={debug ? scores : null} onSelect={openBook} />}
       {paged && <Pager className="pager-bottom" page={page} pageCount={pageCount} onChange={goPage} />}
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
@@ -190,6 +211,27 @@ function App() {
     {editing && <BookModal key={editing.id} book={editing} books={books} summaryJob={summaryJobs.get(editing.id)} onSummarize={startSummary} onSummaryApplied={() => dropJob(editing.id)} tab={modalTab} onTab={setModalTab} onOpen={openBook} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); if (open) openBook(open); else setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
+  </div>
+}
+
+/** 検索欄の下に出す、意味検索の状態（準備中・検索中・エラー）と開発確認用の関連度表示の切り替え */
+function SemanticStatus({ semantic, query, ranked, driveStatus, debug, onDebug, onConnect }: { semantic: ReturnType<typeof useSemanticSearch>; query: string; ranked: boolean; driveStatus: SyncStatus; debug: boolean; onDebug: (v: boolean) => void; onConnect: () => void }) {
+  const { state, progress, indexError, hasIndex } = semantic
+  const needsLogin = driveStatus === 'signedOut' || driveStatus === 'needsFolder' || state.status === 'error' && state.code === 'unauthorized' || indexError?.code === 'unauthorized'
+  let text: React.ReactNode, error = false
+  if (!wantsSemantic(query)) text = '1文字や基準月（YYYY-MM）は、キーワードだけで検索しています。'
+  else if (ranked) text = <>意味の近い順に表示しています（タイトル・著者などが一致した本は少し上位に）。{progress && ` 意味検索の準備中（${progress.done}/${progress.total}冊）…`}</>
+  else if (state.status === 'searching') text = <><LoaderCircle className="spin" /> 意味の近い本を探しています…</>
+  else if (state.status === 'error') { text = `意味検索ができませんでした：${state.message}（キーワードで検索しています）`; error = true }
+  else if (progress) text = <><LoaderCircle className="spin" /> 意味検索の準備中：本の内容をベクトル化しています（{progress.done}/{progress.total}冊）。それまではキーワードで検索しています。</>
+  else if (!hasIndex && indexError) { text = `意味検索の準備ができませんでした：${indexError.message}（キーワードで検索しています）`; error = true }
+  else if (!hasIndex && needsLogin) text = '意味検索を使うには、Google Driveに接続（ログイン）してください。それまではキーワードで検索しています。'
+  else text = 'キーワードで検索しています。'
+  return <div className={`semantic-status${error ? ' error' : ''}`} role="status">
+    <span className="semantic-text"><Sparkles />{text}</span>
+    {needsLogin && driveStatus !== 'unavailable' && !ranked && <button type="button" className="secondary-btn" onClick={onConnect}><Cloud /> Googleでログイン</button>}
+    <label className="semantic-debug" title="開発確認用：各本に関連度（finalScore）を表示します"><input type="checkbox" checked={debug} onChange={e => onDebug(e.target.checked)} /> 関連度を表示</label>
+    {debug && <button type="button" className="semantic-rebuild" disabled={Boolean(progress)} onClick={() => { if (confirm(`意味検索用のデータ（${semantic.indexed}冊分のベクトル）を、全冊計算し直しますか？\nEmbedding APIを全冊分呼び出します。`)) semantic.rebuild() }} title="開発確認用：全冊のEmbeddingを作り直します"><RefreshCw /> 作り直す</button>}
   </div>
 }
 
@@ -206,9 +248,14 @@ function CoverLightbox({ src, alt, onClose }: Zoom & { onClose: () => void }) {
 }
 
 function categoryPath(id: string) { const child = categories.find(c => c.id === id); const parent = categories.find(c => c.id === child?.parent); return { child, parent } }
-function BookCard({ no, book, summarizing, onClick, onZoom }: { no: number; book: Book; summarizing?: boolean; onClick: () => void; onZoom: (z: Zoom) => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
+/** デバッグ表示の関連度（finalScore）。内訳はマウスを乗せると表示 */
+function ScoreBadge({ score }: { score: SearchScore }) {
+  return <span className="search-score" title={`意味 ${score.semantic?.toFixed(3) ?? '未計算'} / キーワード ${score.keyword.toFixed(2)}`}>関連度 {score.score.toFixed(2)}</span>
+}
+
+function BookCard({ no, book, score, summarizing, onClick, onZoom }: { no: number; book: Book; score?: SearchScore; summarizing?: boolean; onClick: () => void; onZoom: (z: Zoom) => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
   <div className="cover-wrap"><CoverImage src={book.cover} alt={`${book.title}の表紙`} onZoom={onZoom} fallback={<div className="cover-placeholder"><BookOpen /><span>NO COVER</span></div>} /></div>
-  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><AuthorName author={book.author} />{book.memo.trim() && <CopySummaryButton text={book.memo} />}<span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left"><span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{summarizing && <span className="summary-busy" title="全ページスキャンから要約を作成しています"><LoaderCircle className="spin" />要約作成中</span>}{book.baseMonth && <span>{book.baseMonth.replace('-', '年')}月</span>}</span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div><CardLinks links={book.links} /></div>
+  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><AuthorName author={book.author} />{book.memo.trim() && <CopySummaryButton text={book.memo} />}<span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left">{score && <ScoreBadge score={score} />}<span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{summarizing && <span className="summary-busy" title="全ページスキャンから要約を作成しています"><LoaderCircle className="spin" />要約作成中</span>}{book.baseMonth && <span>{book.baseMonth.replace('-', '年')}月</span>}</span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div><CardLinks links={book.links} /></div>
 </article> }
 
 /** 著者名。登録済みは人物アイコン付きで濃く、未登録は薄い点線のラベルにして区別しやすくする */
@@ -228,7 +275,7 @@ function CopySummaryButton({ text }: { text: string }) {
   return <button type="button" className={`copy-summary${copied ? ' copied' : ''}`} onClick={copy} onKeyDown={e => e.stopPropagation()} title={copied ? 'コピーしました' : '要約をコピー'} aria-label="要約をコピー">{copied ? <Check /> : <Copy />}</button>
 }
 
-function BookTable({ books, startNo, onSelect }: { books: Book[]; startNo: number; onSelect: (b: Book) => void }) { return <div className="table-wrap panel"><table><thead><tr><th>No.</th><th>本</th><th>分類</th><th>基準月</th><th>読書状況</th><th>関連資料</th><th></th></tr></thead><tbody>{books.map((b, i) => { const { child } = categoryPath(b.categoryId); return <tr key={b.id} onClick={() => onSelect(b)}><td className="book-no">{startNo + i}</td><td><div className="table-book"><CoverImage src={b.cover} alt="" fallback={<BookOpen />} /><span><strong>{b.title}</strong><AuthorName author={b.author} small /></span></div></td><td>{child?.name}</td><td>{b.baseMonth}</td><td><span className={`status inline ${statusClass[b.status]}`}>{b.status}</span></td><td>{b.links.length}件</td><td><ChevronRight /></td></tr> })}</tbody></table></div> }
+function BookTable({ books, startNo, scores, onSelect }: { books: Book[]; startNo: number; scores: Map<string, SearchScore> | null; onSelect: (b: Book) => void }) { return <div className="table-wrap panel"><table><thead><tr><th>No.</th><th>本</th><th>分類</th><th>基準月</th><th>読書状況</th><th>関連資料</th><th></th></tr></thead><tbody>{books.map((b, i) => { const { child } = categoryPath(b.categoryId); return <tr key={b.id} onClick={() => onSelect(b)}><td className="book-no">{startNo + i}</td><td><div className="table-book"><CoverImage src={b.cover} alt="" fallback={<BookOpen />} /><span><strong>{b.title}</strong><AuthorName author={b.author} small /></span></div></td><td>{child?.name}</td><td>{b.baseMonth}</td><td><span className={`status inline ${statusClass[b.status]}`}>{b.status}</span>{scores?.get(b.id) && <ScoreBadge score={scores.get(b.id)!} />}</td><td>{b.links.length}件</td><td><ChevronRight /></td></tr> })}</tbody></table></div> }
 
 function Empty({ onAdd, hasBooks }: { onAdd: () => void; hasBooks: boolean }) { return <div className="empty panel"><div><BookOpen /></div><h2>{hasBooks ? '条件に合う本がありません' : '最初の一冊を登録しましょう'}</h2><p>{hasBooks ? '検索条件や絞り込みを変えてみてください。' : '表紙や要約、関連資料をまとめて管理できます。'}</p>{!hasBooks && <button className="primary-btn" onClick={onAdd}><Plus /> 本を追加する</button>}</div> }
 

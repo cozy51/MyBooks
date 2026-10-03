@@ -3,6 +3,7 @@
 // 2. Gemini の File API にそのまま流し込んでアップロード（大きなPDFでもメモリに溜めない）
 // 3. アップロードしたファイルを読ませて要約を作り、終わったらファイルを削除する
 //   SUMMARY_MODEL … モデル名を変えるときだけ設定（既定: gemini-flash-latest）
+//   SUMMARY_MEDIA_RESOLUTION … PDFを読む解像度（low / medium / high / default。既定: low で速さ優先）
 // リクエスト: { fileId?: DriveのファイルID, url?: 公開されたPDFのURL, title, author }
 import { authorized, fetchBefore, geminiModels, notConfigured, provider, reply, unauthorized, upstreamFailure, UpstreamError, type Provider } from './_lib.js'
 
@@ -92,15 +93,28 @@ export function cleanSummary(text: string): string {
     .trim()
 }
 
+/**
+ * PDFを読むときの解像度（SUMMARY_MEDIA_RESOLUTION: low / medium / high / default）。
+ * 低いほど1ページあたりのトークンが減って速く終わる。要約には細かい文字まで読む必要がないので既定は low
+ */
+function mediaResolution(): string | undefined {
+  const value = (process.env.SUMMARY_MEDIA_RESOLUTION || 'low').trim().toLowerCase()
+  return ['low', 'medium', 'high'].includes(value) ? `MEDIA_RESOLUTION_${value.toUpperCase()}` : undefined
+}
+
 async function summarize(deadline: number, p: Provider, file: { uri: string; mimeType: string }, title: string, author: string): Promise<string> {
   for (const model of geminiModels(process.env.SUMMARY_MODEL)) {
-    for (const thinking of [true, false]) {
+    // 未対応の設定で断られたら、その設定を外して同じモデルでやり直す
+    let thinking = true
+    let resolution = mediaResolution()
+    for (;;) {
+      const generationConfig = { ...(thinking && { thinkingConfig: { thinkingLevel: 'low' } }), ...(resolution && { mediaResolution: resolution }) }
       const res = await fetchBefore(deadline, `${GEMINI}/v1beta/models/${model}:generateContent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': p.key },
         body: JSON.stringify({
           contents: [{ parts: [{ file_data: { mime_type: file.mimeType, file_uri: file.uri } }, { text: instructions(title, author) }] }],
-          ...(thinking && { generationConfig: { thinkingConfig: { thinkingLevel: 'low' } } }),
+          ...(Object.keys(generationConfig).length && { generationConfig }),
         }),
       })
       if (res.ok) {
@@ -108,7 +122,8 @@ async function summarize(deadline: number, p: Provider, file: { uri: string; mim
         return cleanSummary(data.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('') ?? '')
       }
       const detail = await res.text()
-      if (thinking && res.status === 400 && /thinking/i.test(detail)) continue // thinkingLevel 未対応のモデル
+      if (res.status === 400 && thinking && /thinking/i.test(detail)) { thinking = false; continue } // thinkingLevel 未対応のモデル
+      if (res.status === 400 && resolution && /media.?resolution/i.test(detail)) { resolution = undefined; continue } // mediaResolution 未対応のモデル
       if (res.status === 404) break // このモデルは使えないので次へ
       throw new UpstreamError(res.status, detail)
     }

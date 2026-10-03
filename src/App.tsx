@@ -141,11 +141,11 @@ function App() {
     setIssue(id, null)
     return job
   }
-  /** 作成中・順番待ちの要約を中止する */
+  /** 作成中・順番待ちの要約を中止する（確認はしない） */
   const cancelSummary = (id: string) => {
     const job = summaryJobs.get(id)
     if (!job || job.status === 'done') return
-    if (confirm(job.status === 'queued' ? '順番待ちの要約を中止しますか？' : '要約の作成を中止しますか？')) job.abort.abort()
+    job.abort.abort()
   }
   const runSummary = (book: Pick<Book, 'id' | 'title' | 'author'>, scanUrl: string, job: SummaryJob) => {
     const title = book.title.trim() || 'タイトル未入力の本'

@@ -1,10 +1,16 @@
 // 全ページスキャンのファイルから要約を作る（サーバーの /api/summarize-scan 経由。APIキーはブラウザに置かない）
 import { driveFileId } from './cover'
-import { DRIVE_CLIENT_ID, grantFileAccess, signIn, storedToken } from './drive'
+import { DRIVE_CLIENT_ID, grantFileAccess, signIn, signInForRead, storedReadToken, storedToken } from './drive'
 
-async function request(source: { fileId?: string; url?: string }, title: string, author: string) {
-  // Driveのファイルを読むため、Googleにログインしたトークンを渡す
-  const token = storedToken() ?? (DRIVE_CLIENT_ID ? await signIn() : null)
+/** Driveのファイルを読むためのトークン。読み取り専用の許可（初回だけ）をもらえなければ、通常のログインのトークンを使う */
+async function readToken(): Promise<string | null> {
+  if (!DRIVE_CLIENT_ID) return null
+  const saved = storedReadToken()
+  if (saved) return saved
+  try { return await signInForRead() } catch { return storedToken() ?? await signIn() }
+}
+
+async function request(source: { fileId?: string; url?: string }, title: string, author: string, token: string | null) {
   let res: Response
   try {
     // サーバーは約280秒で打ち切って応答するので、それより少し長く待つ
@@ -19,15 +25,20 @@ async function request(source: { fileId?: string; url?: string }, title: string,
   return { ok: res.ok && Boolean(data?.summary), status: res.status, data }
 }
 
-/** 全ページスキャンのリンク先から要約を作る。Driveのファイルを読めないときは、Pickerで許可してもらってから再試行する */
+/**
+ * 全ページスキャンのリンク先から要約を作る。
+ * Driveのファイルは読み取り専用の許可（初回だけ）で読むので、ファイルごとの許可は要らない。
+ * その許可がもらえず読めなかったときだけ、Pickerでそのファイルを許可してもらってから再試行する
+ */
 export async function summarizeScan(scanUrl: string, title: string, author: string): Promise<string> {
   const fileId = driveFileId(scanUrl) ?? undefined
   const source = fileId ? { fileId } : { url: scanUrl }
-  let result = await request(source, title, author)
-  if (result.data?.code === 'needs_access' && fileId && DRIVE_CLIENT_ID) {
+  const token = await readToken()
+  let result = await request(source, title, author, token)
+  if (result.data?.code === 'needs_access' && fileId && DRIVE_CLIENT_ID && !storedReadToken()) {
     if (!confirm('全ページスキャンのファイルを読むために、初回のみファイルへのアクセスを許可する必要があります。\nGoogleの選択画面でそのファイルを選んで「選択」を押してください。')) throw new Error('ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
     if (!await grantFileAccess(fileId, '全ページスキャン')) throw new Error('ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
-    result = await request(source, title, author)
+    result = await request(source, title, author, storedToken() ?? await signIn())
   }
   if (!result.ok) throw new Error(result.data?.error || `要約を作れませんでした（${result.status}）`)
   return result.data!.summary!

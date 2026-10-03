@@ -13,6 +13,9 @@ export const DATA_FOLDER_ID = import.meta.env.VITE_DRIVE_DATA_FOLDER_ID?.trim() 
 export const DATA_FOLDER_URL = `https://drive.google.com/drive/folders/${DATA_FOLDER_ID}`
 const SCOPE = 'https://www.googleapis.com/auth/drive.file'
 const TOKEN_KEY = 'mybooks-drive-token'
+/** 全ページスキャンなど、アプリが作っていないファイルを読むための読み取り専用スコープ（要約のときだけ求める） */
+const READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
+const READ_TOKEN_KEY = 'mybooks-drive-read-token'
 const API = 'https://www.googleapis.com/drive/v3/files'
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files'
 
@@ -21,7 +24,7 @@ export class DriveAuthError extends Error {}
 /** 保存先フォルダへのアクセスが許可されていない */
 export class FolderAccessError extends Error {}
 
-interface TokenResponse { access_token?: string; expires_in?: number; error?: string; error_description?: string }
+interface TokenResponse { access_token?: string; expires_in?: number; scope?: string; error?: string; error_description?: string }
 interface TokenClient { callback: (r: TokenResponse) => void; error_callback?: (e: { type: string }) => void; requestAccessToken: (o?: { prompt?: string }) => void }
 declare global {
   interface Window {
@@ -69,33 +72,45 @@ function loadScript(src: string) {
 }
 const loadGis = () => loadScript('https://accounts.google.com/gsi/client')
 
-/** セッション中に保持しているトークン（期限切れなら null） */
-export function storedToken(): string | null {
+function savedToken(key: string): string | null {
   try {
-    const saved = JSON.parse(sessionStorage.getItem(TOKEN_KEY) || 'null') as { token: string; expiresAt: number } | null
+    const saved = JSON.parse(sessionStorage.getItem(key) || 'null') as { token: string; expiresAt: number } | null
     return saved && saved.expiresAt > Date.now() + 60_000 ? saved.token : null
   } catch { return null }
 }
 
-export function clearToken() { try { sessionStorage.removeItem(TOKEN_KEY) } catch { /* noop */ } }
+/** セッション中に保持しているトークン（期限切れなら null） */
+export const storedToken = () => savedToken(TOKEN_KEY)
+/** セッション中に保持している、読み取り専用スコープ付きのトークン（期限切れなら null） */
+export const storedReadToken = () => savedToken(READ_TOKEN_KEY)
 
-let tokenClient: TokenClient | null = null
-/** Googleアカウントでログインしてアクセストークンを取得する（ボタン操作から呼ぶこと） */
-export async function signIn(): Promise<string> {
+export function clearToken() { try { sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(READ_TOKEN_KEY) } catch { /* noop */ } }
+
+const tokenClients = new Map<string, TokenClient>()
+async function requestToken(scope: string, key: string): Promise<string> {
   await loadGis()
   const oauth = window.google?.accounts.oauth2
   if (!oauth) throw new Error('Googleのログイン機能を読み込めませんでした')
   return new Promise((resolve, reject) => {
-    tokenClient ??= oauth.initTokenClient({ client_id: DRIVE_CLIENT_ID, scope: SCOPE, callback: () => {} })
+    let tokenClient = tokenClients.get(scope)
+    if (!tokenClient) { tokenClient = oauth.initTokenClient({ client_id: DRIVE_CLIENT_ID, scope, callback: () => {} }); tokenClients.set(scope, tokenClient) }
     tokenClient.callback = r => {
       if (!r.access_token) return reject(new Error(r.error_description || r.error || 'ログインできませんでした'))
-      try { sessionStorage.setItem(TOKEN_KEY, JSON.stringify({ token: r.access_token, expiresAt: Date.now() + (r.expires_in ?? 3600) * 1000 })) } catch { /* noop */ }
+      // 許可画面で一部の権限のチェックを外された場合は、許可されなかったものとして扱う
+      const granted = r.scope?.split(' ') ?? []
+      if (r.scope && !scope.split(' ').every(s => granted.includes(s))) return reject(new Error('必要な権限が許可されませんでした'))
+      try { sessionStorage.setItem(key, JSON.stringify({ token: r.access_token, expiresAt: Date.now() + (r.expires_in ?? 3600) * 1000 })) } catch { /* noop */ }
       resolve(r.access_token)
     }
     tokenClient.error_callback = e => reject(new Error(e.type === 'popup_closed' ? 'ログインがキャンセルされました' : 'ログイン画面を開けませんでした（ポップアップの許可を確認してください）'))
     tokenClient.requestAccessToken({ prompt: '' })
   })
 }
+
+/** Googleアカウントでログインしてアクセストークンを取得する（ボタン操作から呼ぶこと） */
+export const signIn = () => requestToken(SCOPE, TOKEN_KEY)
+/** Driveのファイルを読み取れるトークンを取得する（初回だけGoogleの許可画面が出て、2回目以降は自動）。ボタン操作から呼ぶこと */
+export const signInForRead = () => requestToken(`${SCOPE} ${READ_SCOPE}`, READ_TOKEN_KEY)
 
 export function signOut() {
   const token = storedToken()

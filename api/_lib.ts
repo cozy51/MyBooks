@@ -25,9 +25,10 @@ export class UpstreamError extends Error {
 /** 外部AI APIの失敗を、画面に出せるメッセージにする */
 export function upstreamFailure(e: unknown, label: string) {
   const status = e instanceof UpstreamError ? e.status : 0
-  console.error(`${label} failed`, status, e instanceof Error ? e.message : e)
+  console.error(`${label} failed`, status, e instanceof Error ? e.message : e, e instanceof Error && e.cause ? e.cause : '')
   if (status === 429) return reply(429, { error: `${label}の利用上限に達しました。少し待ってから再試行してください。`, code: 'rate_limited' })
-  return reply(502, { error: `${label}の呼び出しに失敗しました（${status || '通信エラー'}）` })
+  // 通信が途中で切れた・相手側の一時的な障害は、しばらくして再試行すれば成功することが多い
+  return reply(502, { error: `${label}の呼び出しに失敗しました（${status || '通信エラー'}）`, ...((!status || status >= 500) && { code: 'temporary' }) })
 }
 
 // 確認済みのトークン（同じインスタンスで何度も Google に問い合わせないため）

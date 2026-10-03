@@ -2,8 +2,11 @@
 import { driveFileId } from './cover'
 import { DRIVE_CLIENT_ID, grantFileAccess, signIn, signInForRead, storedReadToken, storedToken } from './drive'
 
-/** Driveのファイルを読むためのトークン。読み取り専用の許可（初回だけ）をもらえなければ、通常のログインのトークンを使う */
-async function readToken(): Promise<string | null> {
+/**
+ * Driveのファイルを読むためのトークン。読み取り専用の許可（初回だけ）をもらえなければ、通常のログインのトークンを使う。
+ * ログインのポップアップはボタン操作の直後でないと開けないので、ほかの処理を待つ前に呼んでおくこともできる
+ */
+export async function readToken(): Promise<string | null> {
   if (!DRIVE_CLIENT_ID) return null
   const saved = storedReadToken()
   if (saved) return saved

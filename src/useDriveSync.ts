@@ -17,7 +17,8 @@ function loadMeta(storeKey: string): Meta {
 
 export function useDriveSync(storeKey: string, books: Book[], applyRemote: (books: Book[]) => void) {
   const meta = useRef<Meta>(loadMeta(storeKey))
-  const [status, setStatus] = useState<SyncStatus>(() => !drive.DRIVE_CLIENT_ID ? 'unavailable' : drive.storedToken() ? 'syncing' : 'signedOut')
+  // ログインが保管されていれば起動時に自動で受け取り直すので、最初は「同期中」にしておく
+  const [status, setStatus] = useState<SyncStatus>(() => !drive.DRIVE_CLIENT_ID ? 'unavailable' : 'syncing')
   const [message, setMessage] = useState('')
   const [lastSync, setLastSync] = useState(() => loadMeta(storeKey).lastSync)
   const booksRef = useRef(books)
@@ -67,7 +68,7 @@ export function useDriveSync(storeKey: string, books: Book[], applyRemote: (book
     try { await sync(await drive.signIn()) } catch (e) { setStatus('signedOut'); setMessage(e instanceof Error ? e.message : String(e)) }
   }, [sync])
 
-  const syncNow = useCallback(() => { const token = drive.storedToken(); return token ? sync(token) : connect() }, [sync, connect])
+  const syncNow = useCallback(async () => { const token = await drive.currentToken(); return token ? sync(token) : connect() }, [sync, connect])
 
   const grantFolder = useCallback(async () => {
     try { if (await drive.grantFolderAccess()) await syncNow() } catch (e) { setMessage(e instanceof Error ? e.message : String(e)) }
@@ -75,21 +76,31 @@ export function useDriveSync(storeKey: string, books: Book[], applyRemote: (book
 
   const disconnect = useCallback(() => { drive.signOut(); setStatus('signedOut'); setMessage('') }, [])
 
-  // 起動時：このタブでログイン済みなら最新データを取得
+  // 起動時：ログイン済み（このタブ、またはサーバーに保管したログイン）なら最新データを取得
   useEffect(() => {
-    const token = drive.DRIVE_CLIENT_ID && drive.storedToken()
-    if (!token) return
-    const timer = setTimeout(() => void sync(token))
-    return () => clearTimeout(timer)
+    if (!drive.DRIVE_CLIENT_ID) return
+    let cancelled = false
+    void drive.currentToken().then(token => {
+      if (cancelled) return
+      if (token) void sync(token)
+      else setStatus('signedOut')
+    })
+    return () => { cancelled = true }
   }, [sync])
+
+  // ほかの操作（要約・表紙の読み取りなど）でログインし直したら、未接続の表示を解消して同期する
+  const statusRef = useRef(status)
+  useEffect(() => { statusRef.current = status }, [status])
+  useEffect(() => drive.onToken(token => { if (statusRef.current === 'signedOut') void sync(token) }), [sync])
 
   // 編集後、少し待ってからDriveへ保存
   useEffect(() => {
     if (status !== 'pending') return
     const timer = setTimeout(() => {
-      const token = drive.storedToken()
-      if (token) void sync(token)
-      else { setStatus('signedOut'); setMessage('Googleのログインの有効期限が切れました。再接続すると保存されます。') }
+      void drive.currentToken().then(token => {
+        if (token) void sync(token)
+        else { setStatus('signedOut'); setMessage('Googleのログインの有効期限が切れました。再接続すると保存されます。') }
+      })
     }, SAVE_DELAY)
     return () => clearTimeout(timer)
   }, [status, books, sync])

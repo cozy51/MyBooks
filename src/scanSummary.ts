@@ -1,6 +1,6 @@
 // 全ページスキャンのファイルから要約を作る（サーバーの /api/summarize-scan 経由。APIキーはブラウザに置かない）
 import { driveFileId } from './cover'
-import { DRIVE_CLIENT_ID, grantFileAccess, signIn, signInForRead, storedReadToken, storedToken } from './drive'
+import { DRIVE_CLIENT_ID, grantFileAccess, refreshToken, signIn, signInForRead, storedReadToken, storedToken } from './drive'
 
 /**
  * Driveのファイルを読むためのトークン。読み取り専用の許可（初回だけ）をもらえなければ、通常のログインのトークンを使う。
@@ -43,12 +43,27 @@ function inTurn<T>(task: () => Promise<T>): Promise<T> {
   return run
 }
 
-/** 一時的な失敗なら、少し待って最大2回まで再試行する */
+/** 今使えるトークン（順番待ちのあいだに切れていたら、画面を出さずに受け取り直す） */
+async function freshToken(fallback: string | null): Promise<string | null> {
+  const saved = storedReadToken() ?? storedToken()
+  if (saved) return saved
+  await refreshToken()
+  return storedReadToken() ?? storedToken() ?? fallback
+}
+
+/**
+ * 一時的な失敗なら、少し待って最大2回まで再試行する（利用上限のときは長めに待つ）。
+ * ログインが切れていた・ファイルを読めなかったときは、トークンを受け取り直せたら1回だけやり直す
+ */
 async function requestWithRetry(source: { fileId?: string; url?: string }, title: string, author: string, token: string | null, signal?: AbortSignal) {
   let result = await request(source, title, author, token, signal)
-  for (const ms of [5_000, 20_000]) {
+  if ((result.status === 401 || result.data?.code === 'needs_access') && await refreshToken()) {
+    token = storedReadToken() ?? storedToken() ?? token
+    result = await request(source, title, author, token, signal)
+  }
+  for (const attempt of [0, 1]) {
     if (result.ok || !retryable(result)) break
-    await wait(ms, signal)
+    await wait(result.data?.code === 'rate_limited' ? [30_000, 60_000][attempt] : [5_000, 20_000][attempt], signal)
     result = await request(source, title, author, token, signal)
   }
   return result
@@ -83,12 +98,19 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
   const source = fileId ? { fileId } : { url: scanUrl }
   // ログインのポップアップはボタン操作の直後でないと開けないので、順番待ちの前に済ませる
   const token = await readToken()
+  const queuedAt = Date.now()
   return inTurn(async () => {
     // 順番を待つあいだに中止されていれば、始めずに終わる
     if (signal?.aborted) throw cancelled()
     onStart?.()
-    // 順番を待つあいだにログインを更新していれば、新しいトークンを使う
-    let result = await requestWithRetry(source, title, author, storedReadToken() ?? token, signal)
+    // 順番を待つあいだにトークンが切れていたら、受け取り直してから使う（押したときのトークンを使い続けると、後ろの本ほど失敗する）
+    let result = await requestWithRetry(source, title, author, await freshToken(token), signal)
+    if (result.status === 401) throw new SummaryError('failed', 'Googleのログインが切れたため、要約を作れませんでした。「Driveに接続」でログインし直してから、もう一度お試しください。')
+    // ファイルごとの許可（確認とGoogleの選択画面）は、ボタンを押してすぐのときだけ行う。
+    // 順番待ちのあとに確認を出すと、そこで止まって後ろの本が進まなくなるので、失敗として次へ進む
+    if (result.data?.code === 'needs_access' && fileId && DRIVE_CLIENT_ID && !storedReadToken() && Date.now() - queuedAt > 5_000) {
+      throw new SummaryError('failed', '全ページスキャンのファイルを読めませんでした（ファイルへのアクセスの許可が必要です）。この本の詳細画面から要約を作ると、許可の画面が出ます。')
+    }
     if (result.data?.code === 'needs_access' && fileId && DRIVE_CLIENT_ID && !storedReadToken()) {
       if (!confirm('全ページスキャンのファイルを読むために、初回のみファイルへのアクセスを許可する必要があります。\nGoogleの選択画面でそのファイルを選んで「選択」を押してください。')) throw new SummaryError('failed', 'ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
       if (!await grantFileAccess(fileId, '全ページスキャン')) throw new SummaryError('failed', 'ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')

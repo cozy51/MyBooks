@@ -57,6 +57,18 @@ function findDuplicate(books: Book[], book: Pick<Book, 'id' | 'title' | 'author'
   const same = urls.size ? books.find(b => b.id !== book.id && b.links.some(l => urls.has(linkKey(l.url)))) : undefined
   return same && { book: same, reason: 'url' }
 }
+/** 表紙から読み取った内容のうち、本に入れる項目（同じタイトルの本がすでにあれば、前置きやサブタイトルも含めた詳しいタイトルにする） */
+function coverFields(books: Book[], book: Book, info: CoverInfo) {
+  const category = categories.find(c => c.id === info.categoryId && c.parent)
+  const sameTitle = (title: string) => findDuplicate(books, { ...book, title, author: info.author || book.author })?.reason === 'title'
+  const detailed = Boolean(info.title && info.fullTitle && info.fullTitle !== info.title && sameTitle(info.title) && !sameTitle(info.fullTitle))
+  const title = detailed ? info.fullTitle : info.title
+  const read: Partial<Pick<Book, 'title' | 'author' | 'categoryId'>> = { ...(title && { title }), ...(info.author && { author: info.author }), ...(category && { categoryId: category.id }) }
+  return { read, detailed }
+}
+/** 関連リンクの「全ページスキャン」のURL */
+const scanLink = (links: BookLink[]) => links.find(l => isScan(l) && isUrl(l.url.trim()))?.url.trim()
+const REPLACE_MEMO = '全ページスキャンから作った要約で、今の要約を置き換えますか？\n（時間がかかるので、この画面は閉じてもかまいません。終わると自動で保存されます）'
 const emptyBook = (): Book => ({ id: crypto.randomUUID(), title: '', author: '', categoryId: lastCategory(), cover: '', baseMonth: lastBaseMonth(), status: '未読', memo: '', links: [], updatedAt: new Date().toISOString() })
 
 // 表紙はDriveのファイルIDで保持する（以前の共有リンク形式もIDにそろえる）
@@ -106,10 +118,13 @@ function App() {
   const editingRef = useRef(editing)
   useEffect(() => { booksRef.current = books; editingRef.current = editing })
   const dropJob = (id: string) => setSummaryJobs(m => { const next = new Map(m); next.delete(id); return next })
-  const startSummary = (book: Pick<Book, 'id' | 'title' | 'author'>, scanUrl: string) => {
-    if (summaryJobs.get(book.id)?.status === 'running') return
+  const beginJob = (id: string): SummaryJob | null => {
+    if (summaryJobs.get(id)?.status === 'running') return null
     const job: SummaryJob = { startedAt: Date.now(), status: 'running' }
-    setSummaryJobs(m => new Map(m).set(book.id, job))
+    setSummaryJobs(m => new Map(m).set(id, job))
+    return job
+  }
+  const runSummary = (book: Pick<Book, 'id' | 'title' | 'author'>, scanUrl: string, job: SummaryJob) => {
     const title = book.title.trim() || 'タイトル未入力の本'
     summarizeScan(scanUrl, book.title.trim(), book.author.trim()).then(summary => {
       // 詳細画面で開いていれば編集中の要約欄に入れる。閉じていれば、その本の要約として保存する
@@ -123,6 +138,37 @@ function App() {
       dropJob(book.id)
       notify(`「${title}」の要約を作成できませんでした：${e instanceof Error ? e.message : String(e)}`, true)
     })
+  }
+  const startSummary = (book: Pick<Book, 'id' | 'title' | 'author'>, scanUrl: string) => {
+    const job = beginJob(book.id)
+    if (job) runSummary(book, scanUrl, job)
+  }
+  // カードから、詳細画面を開かずに表紙からの入力と全ページスキャンからの要約を続けて行う（読み取った内容はそのまま保存する）
+  const startCoverAndSummary = (book: Book) => {
+    const scanUrl = scanLink(book.links)
+    if (!scanUrl || (book.memo.trim() && !confirm(REPLACE_MEMO))) return
+    const job = beginJob(book.id)
+    if (job) void coverThenSummary(book, scanUrl, job)
+  }
+  const coverThenSummary = async (book: Book, scanUrl: string, job: SummaryJob) => {
+    // Googleのログインのポップアップは、ボタンを押した直後に開く必要があるので先に済ませる
+    await readToken().catch(() => null)
+    let target: Book = book
+    if (book.cover.trim()) {
+      try {
+        const info = await readCoverInfo({ cover: book.cover })
+        const latest = booksRef.current.find(b => b.id === book.id) ?? book
+        const { read } = coverFields(booksRef.current, latest, info)
+        const changed = (Object.keys(read) as (keyof typeof read)[]).filter(key => read[key] !== latest[key].trim())
+        target = { ...latest, ...read }
+        if (changed.length) {
+          const saved = { ...target, updatedAt: new Date().toISOString() }
+          saveBooks(booksRef.current.map(b => b.id === book.id ? saved : b))
+          notify(`「${target.title.trim() || 'タイトル未入力の本'}」の${changed.map(key => FILL_LABEL[key]).join('・')}を表紙から入力しました。続けて要約を作成します`)
+        }
+      } catch (e) { notify(`表紙から読み取れませんでした（${e instanceof Error ? e.message : String(e)}）。入力済みのタイトル・著者で要約を作ります`, true) }
+    }
+    runSummary(target, scanUrl, job)
   }
   // 基準月の候補（今月と、登録済みの本で使っている月を新しい順に）
   const monthOptions = useMemo(() => [...new Set([new Date().toISOString().slice(0, 7), ...books.map(b => b.baseMonth).filter(Boolean)])].sort().reverse(), [books])
@@ -201,7 +247,7 @@ function App() {
       {view === 'map' && books.length > 0 ? <Suspense fallback={<div className="book-map panel map-loading"><LoaderCircle className="spin" /> マップを準備しています…</div>}>
         <BookMap books={books} visibleIds={filteredIds} category={category} onCategory={setCategory} onSelect={openBook} driveStatus={drive.status} onConnect={() => void drive.connect()} />
       </Suspense> : filtered.length === 0 ? <Empty onAdd={() => openBook(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
-        <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} score={debug ? scores?.get(book.id) : undefined} summarizing={summaryJobs.get(book.id)?.status === 'running'} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
+        <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} score={debug ? scores?.get(book.id) : undefined} summarizing={summaryJobs.get(book.id)?.status === 'running'} onAutofill={startCoverAndSummary} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
         <BookTable books={pageBooks} startNo={pageStart + 1} scores={debug ? scores : null} onSelect={openBook} />}
       {paged && <Pager className="pager-bottom" page={page} pageCount={pageCount} onChange={goPage} />}
     </main>
@@ -253,9 +299,9 @@ function ScoreBadge({ score }: { score: SearchScore }) {
   return <span className="search-score" title={`意味 ${score.semantic?.toFixed(3) ?? '未計算'} / キーワード ${score.keyword.toFixed(2)}`}>関連度 {score.score.toFixed(2)}</span>
 }
 
-function BookCard({ no, book, score, summarizing, onClick, onZoom }: { no: number; book: Book; score?: SearchScore; summarizing?: boolean; onClick: () => void; onZoom: (z: Zoom) => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
+function BookCard({ no, book, score, summarizing, onAutofill, onClick, onZoom }: { no: number; book: Book; score?: SearchScore; summarizing?: boolean; onAutofill: (b: Book) => void; onClick: () => void; onZoom: (z: Zoom) => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
   <div className="cover-wrap"><CoverImage src={book.cover} alt={`${book.title}の表紙`} onZoom={onZoom} fallback={<div className="cover-placeholder"><BookOpen /><span>NO COVER</span></div>} /></div>
-  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><AuthorName author={book.author} /><span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left">{score && <ScoreBadge score={score} />}<span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{summarizing ? <span className="summary-busy" title="全ページスキャンから要約を作成しています"><LoaderCircle className="spin" />要約作成中</span> : book.memo.trim() && <CopySummaryButton text={book.memo} />}{book.baseMonth && <span>{book.baseMonth.replace('-', '年')}月</span>}</span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div><CardLinks links={book.links} /></div>
+  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><AuthorName author={book.author} /><span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left">{score && <ScoreBadge score={score} />}<span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{summarizing ? <span className="summary-busy" title="全ページスキャンから要約を作成しています"><LoaderCircle className="spin" />要約作成中</span> : <>{book.memo.trim() && <CopySummaryButton text={book.memo} />}{scanLink(book.links) && <button type="button" className="card-autofill" onClick={e => { e.stopPropagation(); onAutofill(book) }} onKeyDown={e => e.stopPropagation()} title="表紙から入力＋要約（表紙からタイトル・著者・分類を入力し、続けて全ページスキャンから要約を作ります）" aria-label="表紙から入力＋要約"><Sparkles /></button>}</>}{book.baseMonth && <span>{book.baseMonth.replace('-', '年')}月</span>}</span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div><CardLinks links={book.links} /></div>
 </article> }
 
 /** 著者名。登録済みは人物アイコン付きで濃く、未登録は薄い点線のラベルにして区別しやすくする */
@@ -350,12 +396,8 @@ function BookModal({ book, books, summaryJob, onSummarize, onSummaryApplied, tab
   const [readNote, setReadNote] = useState('')
   /** 読み取った内容を入力し、入力したタイトルを返す */
   const applyCoverInfo = (info: CoverInfo): string => {
-    const category = categories.find(c => c.id === info.categoryId && c.parent)
-    // 同じタイトルの本がすでにあれば、前置きやサブタイトルも含めた詳しいタイトルにする
-    const sameTitle = (title: string) => findDuplicate(books, { ...draft, title, author: info.author || draft.author })?.reason === 'title'
-    const detailed = Boolean(info.title && info.fullTitle && info.fullTitle !== info.title && sameTitle(info.title) && !sameTitle(info.fullTitle))
-    const title = detailed ? info.fullTitle : info.title
-    const read: Partial<Pick<Book, 'title' | 'author' | 'categoryId'>> = { ...(title && { title }), ...(info.author && { author: info.author }), ...(category && { categoryId: category.id }) }
+    const { read, detailed } = coverFields(books, draft, info)
+    const title = read.title
     const keys = Object.keys(read) as (keyof typeof read)[]
     if (!keys.length) { setReadNote('表紙から読み取れる文字がありませんでした。'); return draft.title }
     // 確認せずに入力し、変更した項目には変更前の値と「元に戻す」を表示する
@@ -375,11 +417,11 @@ function BookModal({ book, books, summaryJob, onSummarize, onSummaryApplied, tab
     try { applyCoverInfo(await readCoverInfo({ cover: draft.cover })) } catch (e) { alert(e instanceof Error ? e.message : String(e)) } finally { setReading(false) }
   }
   // 全ページスキャンのリンク先から要約を作る
-  const scanUrl = draft.links.find(l => isScan(l) && isUrl(l.url.trim()))?.url.trim()
+  const scanUrl = scanLink(draft.links)
   // 処理は App 側で続くので、この画面を閉じても止まらない（閉じている間に終われば、その本に保存される）
   const summarizing = summaryJob?.status === 'running'
   const summarizeElapsed = useElapsed(summarizing, summaryJob?.startedAt)
-  const confirmReplaceMemo = () => !draft.memo.trim() || confirm('全ページスキャンから作った要約で、今の要約を置き換えますか？\n（時間がかかるので、この画面は閉じてもかまいません。終わると自動で保存されます）')
+  const confirmReplaceMemo = () => !draft.memo.trim() || confirm(REPLACE_MEMO)
   const makeSummary = () => {
     if (!scanUrl || summarizing) return
     if (!confirmReplaceMemo()) return

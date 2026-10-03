@@ -144,16 +144,17 @@ function App() {
     const job = beginJob(book.id)
     if (job) runSummary(book, scanUrl, job)
   }
-  // カードから、詳細画面を開かずに表紙からの入力と全ページスキャンからの要約を続けて行う（読み取った内容はそのまま保存する）
+  // カードから、詳細画面を開かずに表紙からの入力と全ページスキャンからの要約を続けて行う（確認せずに、読み取った内容をそのまま保存する）
+  // 要約がすでにある本は、要約は作り直さず、表紙からの入力だけ行う
   const startCoverAndSummary = (book: Book) => {
-    const scanUrl = scanLink(book.links)
-    if (!scanUrl || (book.memo.trim() && !confirm(REPLACE_MEMO))) return
+    const scanUrl = book.memo.trim() ? undefined : scanLink(book.links)
+    if (!scanUrl && !book.cover.trim()) return
     const job = beginJob(book.id)
     if (job) void coverThenSummary(book, scanUrl, job)
   }
-  const coverThenSummary = async (book: Book, scanUrl: string, job: SummaryJob) => {
+  const coverThenSummary = async (book: Book, scanUrl: string | undefined, job: SummaryJob) => {
     // Googleのログインのポップアップは、ボタンを押した直後に開く必要があるので先に済ませる
-    await readToken().catch(() => null)
+    if (scanUrl) await readToken().catch(() => null)
     let target: Book = book
     if (book.cover.trim()) {
       try {
@@ -162,14 +163,16 @@ function App() {
         const { read } = coverFields(booksRef.current, latest, info)
         const changed = (Object.keys(read) as (keyof typeof read)[]).filter(key => read[key] !== latest[key].trim())
         target = { ...latest, ...read }
+        const title = target.title.trim() || 'タイトル未入力の本'
         if (changed.length) {
           const saved = { ...target, updatedAt: new Date().toISOString() }
           saveBooks(booksRef.current.map(b => b.id === book.id ? saved : b))
-          notify(`「${target.title.trim() || 'タイトル未入力の本'}」の${changed.map(key => FILL_LABEL[key]).join('・')}を表紙から入力しました。続けて要約を作成します`)
-        }
-      } catch (e) { notify(`表紙から読み取れませんでした（${e instanceof Error ? e.message : String(e)}）。入力済みのタイトル・著者で要約を作ります`, true) }
+          notify(`「${title}」の${changed.map(key => FILL_LABEL[key]).join('・')}を表紙から入力しました${scanUrl ? '。続けて要約を作成します' : ''}`)
+        } else if (!scanUrl) notify(`「${title}」は表紙の内容と一致しています`)
+      } catch (e) { notify(`表紙から読み取れませんでした（${e instanceof Error ? e.message : String(e)}）${scanUrl ? '。入力済みのタイトル・著者で要約を作ります' : ''}`, true) }
     }
-    runSummary(target, scanUrl, job)
+    if (scanUrl) runSummary(target, scanUrl, job)
+    else dropJob(book.id)
   }
   // 基準月の候補（今月と、登録済みの本で使っている月を新しい順に）
   const monthOptions = useMemo(() => [...new Set([new Date().toISOString().slice(0, 7), ...books.map(b => b.baseMonth).filter(Boolean)])].sort().reverse(), [books])

@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { ChartPie, ClipboardPaste, ExternalLink, GripVertical, Headphones, Link2, Presentation, ScanLine, Trash2, Video } from 'lucide-react'
-import { CARD_LINK_LIMIT, LINK_PRESETS, SHORT_LABELS, isPreset, isUrl, presetsFirst, readClipboardUrl, sanitizeUrlInput } from './links'
+import { CARD_LINK_LIMIT, LINK_PRESETS, SHORT_LABELS, isPreset, isScan, isUrl, presetsFirst, readClipboardUrl, sanitizeUrlInput } from './links'
 import type { BookLink } from './types'
 
 const ICONS: Record<string, typeof Link2> = { 'インフォグラフィック': ChartPie, '音声解説': Headphones, '動画解説': Video, '全ページスキャン': ScanLine, 'GeminiNotebookスライド': Presentation }
@@ -10,7 +10,7 @@ function LinkIcon({ label }: { label: string }) { const Icon = ICONS[label.trim(
 export function CardLinks({ links }: { links: BookLink[] }) {
   const shown = presetsFirst(links).filter(l => l.url).slice(0, CARD_LINK_LIMIT)
   if (!shown.length) return null
-  return <div className="link-chips">{shown.map(l => <a key={l.id} href={l.url} target="_blank" rel="noreferrer" title={`${l.label || 'リンク'}\n${l.url}`}
+  return <div className="link-chips">{shown.map(l => <a key={l.id} href={l.url} target="_blank" rel="noreferrer" className={isScan(l) ? 'scan' : undefined} title={`${l.label || 'リンク'}\n${l.url}`}
     onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}><LinkIcon label={l.label} />{SHORT_LABELS[l.label.trim()] ?? (l.label || 'リンク')}</a>)}</div>
 }
 

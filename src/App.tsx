@@ -80,6 +80,7 @@ function loadBooks(): Book[] {
 
 const SEMANTIC_KEY = 'mybooks-semantic-search'
 const DEBUG_KEY = 'mybooks-search-debug'
+const PAGE_KEY = 'mybooks-page'
 const readFlag = (key: string, fallback: boolean) => { try { const v = localStorage.getItem(key); return v === null ? fallback : v === '1' } catch { return fallback } }
 const writeFlag = (key: string, value: boolean) => { try { localStorage.setItem(key, value ? '1' : '0') } catch { /* noop */ } }
 /** 検索結果の関連度（デバッグ表示用） */
@@ -188,7 +189,15 @@ function App() {
   }, [books, query, category, status, semanticResult])
   // 絞り込み条件が変わったら1ページ目に戻す（編集・追加では今のページのまま）
   const filterKey = `${query}\n${category}\n${status}`
-  const [paging, setPaging] = useState({ key: filterKey, page: 1 })
+  // 表示中のページは再読み込みしても戻るように覚えておく（絞り込み条件ごと）
+  const [paging, setPaging] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(PAGE_KEY) || 'null') as { key?: unknown; page?: unknown } | null
+      if (saved?.key === filterKey && Number.isInteger(saved.page) && (saved.page as number) > 0) return { key: filterKey, page: saved.page as number }
+    } catch { /* noop */ }
+    return { key: filterKey, page: 1 }
+  })
+  useEffect(() => { try { localStorage.setItem(PAGE_KEY, JSON.stringify(paging)) } catch { /* noop */ } }, [paging])
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   if (paging.key !== filterKey) setPaging({ key: filterKey, page: 1 })
   const page = paging.key === filterKey ? Math.min(paging.page, pageCount) : 1

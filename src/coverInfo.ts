@@ -1,6 +1,6 @@
 // 表紙画像から、タイトル・著者・分類を読み取る（サーバーの /api/cover-info 経由。APIキーはブラウザに置かない）
 import { categories } from './data'
-import { storedToken } from './drive'
+import { DRIVE_CLIENT_ID, signIn, storedReadToken, storedToken } from './drive'
 
 /** fullTitle: 同じタイトルの本があるときに使う、前置きやサブタイトルも含めた詳しい書名 */
 export interface CoverInfo { title: string; fullTitle: string; author: string; categoryId: string }
@@ -20,7 +20,9 @@ async function shrink(image: Blob): Promise<{ image: string; mimeType: string }>
 
 /** 表紙（画像そのもの、または保存済みの DriveのファイルID・画像URL）を読み取る */
 export async function readCoverInfo(source: { image: Blob } | { cover: string }): Promise<CoverInfo> {
-  const token = storedToken()
+  // Googleにログインしていなければ、先にログインしてもらう（サーバーはログイン中のユーザーからの依頼だけ受け付ける）。
+  // 要約のときにもらった読み取り用のトークンでもよい
+  const token = storedToken() ?? storedReadToken() ?? (DRIVE_CLIENT_ID ? await signIn() : null)
   const choices = categories.filter(c => c.parent).map(c => ({ id: c.id, name: `${categories.find(p => p.id === c.parent)?.name} ＞ ${c.name}` }))
   const payload = 'image' in source ? await shrink(source.image) : { cover: source.cover }
   let res: Response

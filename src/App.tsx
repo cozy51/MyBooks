@@ -255,7 +255,7 @@ function ScoreBadge({ score }: { score: SearchScore }) {
 
 function BookCard({ no, book, score, summarizing, onClick, onZoom }: { no: number; book: Book; score?: SearchScore; summarizing?: boolean; onClick: () => void; onZoom: (z: Zoom) => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
   <div className="cover-wrap"><CoverImage src={book.cover} alt={`${book.title}の表紙`} onZoom={onZoom} fallback={<div className="cover-placeholder"><BookOpen /><span>NO COVER</span></div>} /></div>
-  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><AuthorName author={book.author} />{book.memo.trim() && <CopySummaryButton text={book.memo} />}<span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left">{score && <ScoreBadge score={score} />}<span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{summarizing && <span className="summary-busy" title="全ページスキャンから要約を作成しています"><LoaderCircle className="spin" />要約作成中</span>}{book.baseMonth && <span>{book.baseMonth.replace('-', '年')}月</span>}</span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div><CardLinks links={book.links} /></div>
+  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><AuthorName author={book.author} /><span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left">{score && <ScoreBadge score={score} />}<span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{summarizing ? <span className="summary-busy" title="全ページスキャンから要約を作成しています"><LoaderCircle className="spin" />要約作成中</span> : book.memo.trim() && <CopySummaryButton text={book.memo} />}{book.baseMonth && <span>{book.baseMonth.replace('-', '年')}月</span>}</span><span>{book.links.length ? `${book.links.length}件の資料` : '資料なし'}</span></div><CardLinks links={book.links} /></div>
 </article> }
 
 /** 著者名。登録済みは人物アイコン付きで濃く、未登録は薄い点線のラベルにして区別しやすくする */
@@ -265,14 +265,14 @@ function AuthorName({ author, small }: { author: string; small?: boolean }) {
   return name ? <Tag className="author" title={name}><UserRound /><span>{name}</span></Tag> : <Tag className="author missing">著者未登録</Tag>
 }
 
-/** カードの要約コピーボタン（場所をとらないよう小さなアイコンのみ） */
+/** カードの要約コピーボタン（要約作成中の表示と同じ位置に出す） */
 function CopySummaryButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   const copy = async (e: React.MouseEvent) => {
     e.stopPropagation()
     try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { alert('要約をコピーできませんでした') }
   }
-  return <button type="button" className={`copy-summary${copied ? ' copied' : ''}`} onClick={copy} onKeyDown={e => e.stopPropagation()} title={copied ? 'コピーしました' : '要約をコピー'} aria-label="要約をコピー">{copied ? <Check /> : <Copy />}</button>
+  return <button type="button" className={`copy-summary${copied ? ' copied' : ''}`} onClick={copy} onKeyDown={e => e.stopPropagation()} title={copied ? 'コピーしました' : '要約をコピー'} aria-label="要約をコピー">{copied ? <Check /> : <Copy />}{copied ? 'コピーしました' : '要約コピー'}</button>
 }
 
 function BookTable({ books, startNo, scores, onSelect }: { books: Book[]; startNo: number; scores: Map<string, SearchScore> | null; onSelect: (b: Book) => void }) { return <div className="table-wrap panel"><table><thead><tr><th>No.</th><th>本</th><th>分類</th><th>基準月</th><th>読書状況</th><th>関連資料</th><th></th></tr></thead><tbody>{books.map((b, i) => { const { child } = categoryPath(b.categoryId); return <tr key={b.id} onClick={() => onSelect(b)}><td className="book-no">{startNo + i}</td><td><div className="table-book"><CoverImage src={b.cover} alt="" fallback={<BookOpen />} /><span><strong>{b.title}</strong><AuthorName author={b.author} small /></span></div></td><td>{child?.name}</td><td>{b.baseMonth}</td><td><span className={`status inline ${statusClass[b.status]}`}>{b.status}</span>{scores?.get(b.id) && <ScoreBadge score={scores.get(b.id)!} />}</td><td>{b.links.length}件</td><td><ChevronRight /></td></tr> })}</tbody></table></div> }

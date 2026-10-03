@@ -26,11 +26,14 @@ export class FolderAccessError extends Error {}
 
 interface TokenResponse { access_token?: string; expires_in?: number; scope?: string; error?: string; error_description?: string }
 interface TokenClient { callback: (r: TokenResponse) => void; error_callback?: (e: { type: string }) => void; requestAccessToken: (o?: { prompt?: string }) => void }
+interface CodeResponse { code?: string; scope?: string; error?: string; error_description?: string }
+interface CodeClient { requestCode: () => void }
 declare global {
   interface Window {
     google?: {
       accounts: { oauth2: {
         initTokenClient: (c: { client_id: string; scope: string; callback: (r: TokenResponse) => void; error_callback?: (e: { type: string }) => void }) => TokenClient
+        initCodeClient: (c: { client_id: string; scope: string; ux_mode: 'popup'; include_granted_scopes?: boolean; callback: (r: CodeResponse) => void; error_callback?: (e: { type: string }) => void }) => CodeClient
         revoke: (token: string, done?: () => void) => void
       } }
       picker?: PickerNamespace
@@ -86,8 +89,84 @@ export const storedReadToken = () => savedToken(READ_TOKEN_KEY)
 
 export function clearToken() { try { sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(READ_TOKEN_KEY) } catch { /* noop */ } }
 
+/** 受け取ったトークンを保存する（読み取り専用の権限も含んでいれば、要約用のトークンとしても使う） */
+function saveToken(token: string, expiresIn: number | undefined, scope: string | undefined, key?: string) {
+  const value = JSON.stringify({ token, expiresAt: Date.now() + (expiresIn ?? 3600) * 1000 })
+  const keys = key ? [key] : [TOKEN_KEY, ...(scope?.split(' ').includes(READ_SCOPE) ? [READ_TOKEN_KEY] : [])]
+  try { for (const k of keys) sessionStorage.setItem(k, value) } catch { /* noop */ }
+  for (const listener of tokenListeners) listener(token)
+}
+
+// ---- ログインを保つ仕組み（サーバーの /api/auth がリフレッシュトークンを Cookie に保管する） ----
+// ブラウザだけで受け取るトークンは1時間で切れるので、サーバーで新しいトークンを発行してもらい、ログインが切れないようにする。
+// サーバーに GOOGLE_CLIENT_SECRET が設定されていなければ（not_configured）、従来どおりブラウザだけでログインする。
+let serverAuth: boolean | undefined
+let refreshing: Promise<string | null> | null = null
+const tokenListeners = new Set<(token: string) => void>()
+/** トークンを新しく受け取ったときに呼ばれる（自動更新・再接続で Drive の同期をやり直すため） */
+export function onToken(listener: (token: string) => void) { tokenListeners.add(listener); return () => { tokenListeners.delete(listener) } }
+
+async function authApi(body: object): Promise<{ status: number; data: TokenResponse & { code?: string } }> {
+  const res = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin' })
+  return { status: res.status, data: await res.json().catch(() => ({})) }
+}
+
+/** サーバーに保管したログインで、画面を出さずに新しいトークンを受け取る（ログインしていなければ null） */
+export function refreshToken(): Promise<string | null> {
+  if (!DRIVE_CLIENT_ID || serverAuth === false) return Promise.resolve(null)
+  refreshing ??= (async () => {
+    try {
+      const { status, data } = await authApi({ action: 'refresh' })
+      if (status === 501 || status === 404 || status === 405) { serverAuth = false; return null }
+      serverAuth = true
+      if (status !== 200 || !data.access_token) return null
+      saveToken(data.access_token, data.expires_in, data.scope)
+      return data.access_token
+    } catch { return null } finally { refreshing = null }
+  })()
+  return refreshing
+}
+
+/** 使えるトークン。切れていれば、画面を出さずに受け取り直す（それでもなければ null） */
+export async function currentToken(): Promise<string | null> {
+  return storedToken() ?? await refreshToken()
+}
+
+// トークンが切れる5分前に、自動で受け取り直す
+if (typeof window !== 'undefined' && DRIVE_CLIENT_ID) {
+  setInterval(() => {
+    if (serverAuth === false) return
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(TOKEN_KEY) || 'null') as { expiresAt: number } | null
+      if (saved && saved.expiresAt - Date.now() < 5 * 60_000) void refreshToken()
+    } catch { /* noop */ }
+  }, 60_000)
+}
+
+/** ログイン画面（ポップアップ）を出して、サーバーにログインを保管してもらう */
+async function signInWithServer(): Promise<string> {
+  await loadGis()
+  const oauth = window.google?.accounts.oauth2
+  if (!oauth) throw new Error('Googleのログイン機能を読み込めませんでした')
+  const code = await new Promise<string>((resolve, reject) => {
+    oauth.initCodeClient({
+      client_id: DRIVE_CLIENT_ID, scope: `${SCOPE} ${READ_SCOPE}`, ux_mode: 'popup', include_granted_scopes: true,
+      callback: r => r.code ? resolve(r.code) : reject(new Error(r.error_description || r.error || 'ログインできませんでした')),
+      error_callback: e => reject(new Error(e.type === 'popup_closed' ? 'ログインがキャンセルされました' : 'ログイン画面を開けませんでした（ポップアップの許可を確認してください）')),
+    }).requestCode()
+  })
+  const { status, data } = await authApi({ action: 'exchange', code })
+  if (status !== 200 || !data.access_token) throw new Error((data as { error?: string }).error || `ログインできませんでした（${status}）`)
+  saveToken(data.access_token, data.expires_in, data.scope)
+  return data.access_token
+}
+
 const tokenClients = new Map<string, TokenClient>()
 async function requestToken(scope: string, key: string): Promise<string> {
+  // サーバーにログインを保管できるなら、そちらを使う（一度ログインすれば、それ以降はログインが切れない）
+  const refreshed = await refreshToken()
+  if (refreshed && (key !== READ_TOKEN_KEY || storedReadToken())) return refreshed
+  if (serverAuth) return signInWithServer()
   await loadGis()
   const oauth = window.google?.accounts.oauth2
   if (!oauth) throw new Error('Googleのログイン機能を読み込めませんでした')
@@ -99,7 +178,7 @@ async function requestToken(scope: string, key: string): Promise<string> {
       // 許可画面で一部の権限のチェックを外された場合は、許可されなかったものとして扱う
       const granted = r.scope?.split(' ') ?? []
       if (r.scope && !scope.split(' ').every(s => granted.includes(s))) return reject(new Error('必要な権限が許可されませんでした'))
-      try { sessionStorage.setItem(key, JSON.stringify({ token: r.access_token, expiresAt: Date.now() + (r.expires_in ?? 3600) * 1000 })) } catch { /* noop */ }
+      saveToken(r.access_token, r.expires_in, r.scope, key)
       resolve(r.access_token)
     }
     tokenClient.error_callback = e => reject(new Error(e.type === 'popup_closed' ? 'ログインがキャンセルされました' : 'ログイン画面を開けませんでした（ポップアップの許可を確認してください）'))
@@ -110,12 +189,19 @@ async function requestToken(scope: string, key: string): Promise<string> {
 /** Googleアカウントでログインしてアクセストークンを取得する（ボタン操作から呼ぶこと） */
 export const signIn = () => requestToken(SCOPE, TOKEN_KEY)
 /** Driveのファイルを読み取れるトークンを取得する（初回だけGoogleの許可画面が出て、2回目以降は自動）。ボタン操作から呼ぶこと */
-export const signInForRead = () => requestToken(`${SCOPE} ${READ_SCOPE}`, READ_TOKEN_KEY)
+export async function signInForRead(): Promise<string> {
+  await requestToken(`${SCOPE} ${READ_SCOPE}`, READ_TOKEN_KEY)
+  // サーバー経由のログインで読み取り専用の権限が許可されなかったときは、従来どおりファイルごとの許可に回す
+  const read = storedReadToken()
+  if (!read) throw new Error('読み取り専用の権限が許可されませんでした')
+  return read
+}
 
 export function signOut() {
   const token = storedToken()
   clearToken()
   if (token) window.google?.accounts.oauth2.revoke(token)
+  if (serverAuth) void authApi({ action: 'signout' }).catch(() => undefined)
 }
 
 async function call(token: string, url: string, init: RequestInit = {}) {

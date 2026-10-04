@@ -168,6 +168,7 @@ function App() {
       const message = e instanceof Error ? e.message : String(e)
       setIssue(book.id, { kind, message, at: new Date().toISOString() })
       if (kind === 'cancelled') notify(`「${title}」の要約の作成を中止しました`)
+      else if (kind === 'mismatch') notify(`「${title}」の全ページスキャンは別の本のファイルのようです。要約は保存しませんでした。リンクを確認してください`, true)
       else notify(`「${title}」の要約を作成できませんでした${kind === 'timeout' ? '（時間切れ）' : ''}：${message}`, true)
     })
   }

@@ -75,28 +75,47 @@ type Body = Record<string, unknown>
  * ログインが切れていた・ファイルを読めなかったときは、トークンを受け取り直せたら1回だけやり直す
  */
 async function requestWithRetry(body: Body, token: string | null, signal?: AbortSignal) {
-  let result = await request(body, token, signal)
+  let result = await unstuck(body, token, signal)
   if ((result.status === 401 || result.data?.code === 'needs_access') && await refreshToken()) {
     token = storedReadToken() ?? storedToken() ?? token
-    result = await request(body, token, signal)
+    result = await unstuck(body, token, signal)
   }
   for (const attempt of [0, 1]) {
     if (result.ok || !retryable(result)) break
     await wait(result.data?.code === 'rate_limited' ? [30_000, 60_000][attempt] : [5_000, 20_000][attempt], signal)
-    result = await request(body, token, signal)
+    result = await unstuck(body, token, signal)
   }
   return result
 }
 
-async function request(body: Body, token: string | null, signal?: AbortSignal): Promise<{ ok: boolean; status: number; data: ResponseData | null }> {
+/**
+ * 段階ごとの「ふだんならこの時間で終わる」目安。これを大きく過ぎた依頼は、サーバーかGeminiの側で固まっていることが多く、
+ * 打ち切ってやり直すとすぐに終わるので、自動で打ち切ってやり直す（最大2回。最後の1回は、サーバーの制限時間いっぱいまで待つ）
+ */
+const STALL_LIMIT: Record<string, number> = { upload: 150_000, status: 30_000, summarize: 120_000 }
+const STALL_RETRIES = 2
+
+async function unstuck(body: Body, token: string | null, signal?: AbortSignal) {
+  const limit = STALL_LIMIT[String(body.step)]
+  if (limit) {
+    for (let i = 0; i < STALL_RETRIES; i++) {
+      const result = await request(body, token, signal, limit)
+      if (result.data?.code !== 'stalled') return result
+    }
+  }
+  return request(body, token, signal)
+}
+
+/** limit: この時間で応答がなければ打ち切る（既定は、サーバーが約280秒で打ち切って応答するので、それより少し長く待つ） */
+async function request(body: Body, token: string | null, signal?: AbortSignal, limit = 300_000): Promise<{ ok: boolean; status: number; data: ResponseData | null }> {
   let res: Response
   try {
-    // サーバーは約280秒で打ち切って応答するので、それより少し長く待つ
-    const timeout = AbortSignal.timeout(300_000)
+    const timeout = AbortSignal.timeout(limit)
     res = await fetch('/api/summarize-scan', { signal: signal ? AbortSignal.any([timeout, signal]) : timeout, method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) })
   } catch (e) {
     if (signal?.aborted) throw cancelled()
-    if (e instanceof Error && e.name === 'TimeoutError') return { ok: false, status: 504, data: { error: TIMEOUT_MESSAGE, code: 'timeout' } }
+    // 目安の時間で打ち切ったとき（stalled）は、呼び出し元がすぐにやり直す
+    if (e instanceof Error && e.name === 'TimeoutError') return { ok: false, status: 504, data: { error: TIMEOUT_MESSAGE, code: limit < 300_000 ? 'stalled' : 'timeout' } }
     // 一時的に接続できなかっただけのこともあるので、再試行できるようにエラーにはしない
     return { ok: false, status: 0, data: { error: '要約を作るAPIに接続できませんでした。ネットワークを確認してください。', code: 'temporary' } }
   }
@@ -196,8 +215,9 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
     // ファイルが消えていた・別の本だった（サーバーが削除済み）ときは、次はアップロードからやり直す
     if (result.data?.code === 'file_gone' || result.data?.code === 'mismatch') saveUpload(uploadKey, null)
     if (!result.ok || !result.data?.summary) throw failed(result)
-    // 要約ができたら、サーバーがファイルを削除している
+    // 要約ができたら、アップロードしたファイルを削除する（打ち切った依頼がサーバーに残っていても困らないよう、サーバーでは消さずにここで消す）
     saveUpload(uploadKey, null)
+    void request({ step: 'cleanup', name }, storedReadToken() ?? storedToken() ?? auth).catch(() => undefined)
     return result.data.summary
   }, signal)
 }

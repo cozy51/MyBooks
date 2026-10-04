@@ -13,7 +13,7 @@ export async function readToken(): Promise<string | null> {
   try { return await signInForRead() } catch { return storedToken() ?? await signIn() }
 }
 
-interface ResponseData { summary?: string; error?: string; code?: string }
+interface ResponseData { summary?: string; error?: string; code?: string; file?: { name: string; state?: string } }
 
 /** 要約を作れなかった理由（timeout: 時間切れ / failed: そのほかの失敗 / cancelled: 中止した） */
 export type SummaryFailure = 'timeout' | 'failed' | 'cancelled'
@@ -51,44 +51,71 @@ async function freshToken(fallback: string | null): Promise<string | null> {
   return storedReadToken() ?? storedToken() ?? fallback
 }
 
+type Body = Record<string, unknown>
+
 /**
  * 一時的な失敗なら、少し待って最大2回まで再試行する（利用上限のときは長めに待つ）。
  * ログインが切れていた・ファイルを読めなかったときは、トークンを受け取り直せたら1回だけやり直す
  */
-async function requestWithRetry(source: { fileId?: string; url?: string }, title: string, author: string, token: string | null, signal?: AbortSignal) {
-  let result = await request(source, title, author, token, signal)
+async function requestWithRetry(body: Body, token: string | null, signal?: AbortSignal) {
+  let result = await request(body, token, signal)
   if ((result.status === 401 || result.data?.code === 'needs_access') && await refreshToken()) {
     token = storedReadToken() ?? storedToken() ?? token
-    result = await request(source, title, author, token, signal)
+    result = await request(body, token, signal)
   }
   for (const attempt of [0, 1]) {
     if (result.ok || !retryable(result)) break
     await wait(result.data?.code === 'rate_limited' ? [30_000, 60_000][attempt] : [5_000, 20_000][attempt], signal)
-    result = await request(source, title, author, token, signal)
+    result = await request(body, token, signal)
   }
   return result
 }
 
-async function request(source: { fileId?: string; url?: string }, title: string, author: string, token: string | null, signal?: AbortSignal) {
+async function request(body: Body, token: string | null, signal?: AbortSignal): Promise<{ ok: boolean; status: number; data: ResponseData | null }> {
   let res: Response
   try {
     // サーバーは約280秒で打ち切って応答するので、それより少し長く待つ
     const timeout = AbortSignal.timeout(300_000)
-    res = await fetch('/api/summarize-scan', { signal: signal ? AbortSignal.any([timeout, signal]) : timeout, method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ ...source, title, author }) })
+    res = await fetch('/api/summarize-scan', { signal: signal ? AbortSignal.any([timeout, signal]) : timeout, method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) })
   } catch (e) {
     if (signal?.aborted) throw cancelled()
-    if (e instanceof Error && e.name === 'TimeoutError') throw new SummaryError('timeout', TIMEOUT_MESSAGE, { cause: e })
+    if (e instanceof Error && e.name === 'TimeoutError') return { ok: false, status: 504, data: { error: TIMEOUT_MESSAGE, code: 'timeout' } }
     // 一時的に接続できなかっただけのこともあるので、再試行できるようにエラーにはしない
-    return { ok: false, status: 0, data: { error: '要約を作るAPIに接続できませんでした。ネットワークを確認してください。', code: 'temporary' } as ResponseData }
+    return { ok: false, status: 0, data: { error: '要約を作るAPIに接続できませんでした。ネットワークを確認してください。', code: 'temporary' } }
   }
   const data = await res.json().catch(() => null) as ResponseData | null
   if (res.status === 404 && !data) throw new SummaryError('failed', '要約を作るAPI（/api/summarize-scan）が見つかりません。Vercelへのデプロイ、または npm run dev で起動してください。')
-  if (res.status === 504) throw new SummaryError('timeout', data?.error || TIMEOUT_MESSAGE)
-  return { ok: res.ok && Boolean(data?.summary), status: res.status, data }
+  if (res.status === 504) return { ok: false, status: 504, data: { ...data, error: data?.error || TIMEOUT_MESSAGE, code: 'timeout' } }
+  return { ok: res.ok, status: res.status, data }
+}
+
+const failed = (result: { status: number; data: ResponseData | null }) =>
+  new SummaryError(result.data?.code === 'timeout' ? 'timeout' : 'failed', result.data?.error || `要約を作れませんでした（${result.status}）`)
+
+// ---- アップロードしたファイルの記録 ----
+// 時間切れ・失敗のあとにやり直すとき、Gemini へのアップロード（大きなPDFでは時間がかかる）を省くため、
+// 全ページスキャンごとに、アップロード先のファイル名を覚えておく（Gemini は48時間で自動削除するので、それより短い間だけ使う）
+const UPLOADS_KEY = 'mybooks-summary-uploads'
+const UPLOAD_TTL = 40 * 60 * 60 * 1000
+type Uploads = Record<string, { name: string; at: number }>
+function loadUploads(): Uploads {
+  try {
+    const all = JSON.parse(localStorage.getItem(UPLOADS_KEY) || '{}') as Uploads
+    return Object.fromEntries(Object.entries(all).filter(([, u]) => Date.now() - u.at < UPLOAD_TTL))
+  } catch { return {} }
+}
+function saveUpload(key: string, name: string | null) {
+  const all = loadUploads()
+  if (name) all[key] = { name, at: Date.now() }; else delete all[key]
+  try { localStorage.setItem(UPLOADS_KEY, JSON.stringify(all)) } catch { /* noop */ }
 }
 
 /**
  * 全ページスキャンのリンク先から要約を作る。
+ * 時間切れになりにくいよう、サーバーには段階ごとに分けて頼む（それぞれに約5分の制限時間がある）。
+ *   1. Drive のファイルを Gemini へアップロード（前にアップロード済みなら省く）
+ *   2. Gemini が読める状態になるまで待つ
+ *   3. 要約を作る（時間切れのときは、アップロードしたファイルのまま1回だけやり直す）
  * Driveのファイルは読み取り専用の許可（初回だけ）で読むので、ファイルごとの許可は要らない。
  * その許可がもらえず読めなかったときだけ、Pickerでそのファイルを許可してもらってから再試行する
  */
@@ -96,6 +123,7 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
   const { signal, onStart } = options
   const fileId = driveFileId(scanUrl) ?? undefined
   const source = fileId ? { fileId } : { url: scanUrl }
+  const uploadKey = fileId ?? scanUrl
   // ログインのポップアップはボタン操作の直後でないと開けないので、順番待ちの前に済ませる
   const token = await readToken()
   const queuedAt = Date.now()
@@ -104,19 +132,53 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
     if (signal?.aborted) throw cancelled()
     onStart?.()
     // 順番を待つあいだにトークンが切れていたら、受け取り直してから使う（押したときのトークンを使い続けると、後ろの本ほど失敗する）
-    let result = await requestWithRetry(source, title, author, await freshToken(token), signal)
-    if (result.status === 401) throw new SummaryError('failed', 'Googleのログインが切れたため、要約を作れませんでした。「Driveに接続」でログインし直してから、もう一度お試しください。')
-    // ファイルごとの許可（確認とGoogleの選択画面）は、ボタンを押してすぐのときだけ行う。
-    // 順番待ちのあとに確認を出すと、そこで止まって後ろの本が進まなくなるので、失敗として次へ進む
-    if (result.data?.code === 'needs_access' && fileId && DRIVE_CLIENT_ID && !storedReadToken() && Date.now() - queuedAt > 5_000) {
-      throw new SummaryError('failed', '全ページスキャンのファイルを読めませんでした（ファイルへのアクセスの許可が必要です）。この本の詳細画面から要約を作ると、許可の画面が出ます。')
+    const auth = await freshToken(token)
+
+    // 1. アップロード（前回アップロードしたファイルが残っていれば使う）
+    let name: string | undefined = loadUploads()[uploadKey]?.name
+    let state: string | undefined
+    if (name) {
+      const status = await requestWithRetry({ step: 'status', name }, auth, signal)
+      state = status.ok ? status.data?.file?.state : undefined
+      if (!state || state === 'FAILED') { saveUpload(uploadKey, null); name = undefined }
     }
-    if (result.data?.code === 'needs_access' && fileId && DRIVE_CLIENT_ID && !storedReadToken()) {
-      if (!confirm('全ページスキャンのファイルを読むために、初回のみファイルへのアクセスを許可する必要があります。\nGoogleの選択画面でそのファイルを選んで「選択」を押してください。')) throw new SummaryError('failed', 'ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
-      if (!await grantFileAccess(fileId, '全ページスキャン')) throw new SummaryError('failed', 'ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
-      result = await requestWithRetry(source, title, author, storedToken() ?? await signIn(), signal)
+    if (!name) {
+      let result = await requestWithRetry({ step: 'upload', ...source }, auth, signal)
+      if (result.status === 401) throw new SummaryError('failed', 'Googleのログインが切れたため、要約を作れませんでした。「Driveに接続」でログインし直してから、もう一度お試しください。')
+      // ファイルごとの許可（確認とGoogleの選択画面）は、ボタンを押してすぐのときだけ行う。
+      // 順番待ちのあとに確認を出すと、そこで止まって後ろの本が進まなくなるので、失敗として次へ進む
+      if (result.data?.code === 'needs_access' && fileId && DRIVE_CLIENT_ID && !storedReadToken() && Date.now() - queuedAt > 5_000) {
+        throw new SummaryError('failed', '全ページスキャンのファイルを読めませんでした（ファイルへのアクセスの許可が必要です）。この本の詳細画面から要約を作ると、許可の画面が出ます。')
+      }
+      if (result.data?.code === 'needs_access' && fileId && DRIVE_CLIENT_ID && !storedReadToken()) {
+        if (!confirm('全ページスキャンのファイルを読むために、初回のみファイルへのアクセスを許可する必要があります。\nGoogleの選択画面でそのファイルを選んで「選択」を押してください。')) throw new SummaryError('failed', 'ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
+        if (!await grantFileAccess(fileId, '全ページスキャン')) throw new SummaryError('failed', 'ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
+        result = await requestWithRetry({ step: 'upload', ...source }, storedToken() ?? await signIn(), signal)
+      }
+      if (!result.ok || !result.data?.file) throw failed(result)
+      name = result.data.file.name
+      state = result.data.file.state
+      saveUpload(uploadKey, name)
     }
-    if (!result.ok) throw new SummaryError(result.data?.code === 'timeout' ? 'timeout' : 'failed', result.data?.error || `要約を作れませんでした（${result.status}）`)
-    return result.data!.summary!
+
+    // 2. Gemini が読める状態（ACTIVE）になるまで待つ（最大10分）
+    const readyBy = Date.now() + 10 * 60_000
+    while (state === 'PROCESSING') {
+      if (Date.now() > readyBy) throw new SummaryError('timeout', 'スキャンのファイルの準備が時間内に終わりませんでした。しばらくしてから、もう一度お試しください（アップロードはやり直さずに続きから行います）。')
+      await wait(5_000, signal)
+      const status = await requestWithRetry({ step: 'status', name }, auth, signal)
+      if (!status.ok) throw failed(status)
+      state = status.data?.file?.state
+    }
+    if (state === 'FAILED') { saveUpload(uploadKey, null); throw new SummaryError('failed', 'このファイルは要約に使えませんでした（形式が対応していないなど）。') }
+
+    // 3. 要約を作る（時間切れなら、アップロードしたファイルのまま1回だけやり直す）
+    let result = await requestWithRetry({ step: 'summarize', name, title, author }, storedReadToken() ?? storedToken() ?? auth, signal)
+    if (result.data?.code === 'timeout') result = await requestWithRetry({ step: 'summarize', name, title, author }, storedReadToken() ?? storedToken() ?? auth, signal)
+    if (result.data?.code === 'file_gone') saveUpload(uploadKey, null)
+    if (!result.ok || !result.data?.summary) throw failed(result)
+    // 要約ができたら、サーバーがファイルを削除している
+    saveUpload(uploadKey, null)
+    return result.data.summary
   })
 }

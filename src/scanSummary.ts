@@ -35,11 +35,28 @@ const wait = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, r
 /** 再試行すれば成功する見込みがある失敗（通信の途中切れ・相手側の一時的な障害・利用上限） */
 const retryable = (r: { status: number; data: ResponseData | null }) => r.data?.code === 'temporary' || r.data?.code === 'rate_limited' || r.status === 503
 
-/** 要約は1件ずつ順番に作る（大きなPDFの転送が同時に走ると、通信が途中で切れやすいため） */
-let queue: Promise<unknown> = Promise.resolve()
-function inTurn<T>(task: () => Promise<T>): Promise<T> {
-  const run = queue.then(task, task)
-  queue = run.catch(() => undefined)
+/** 同時に作る要約の数（多い本をまとめて頼んだとき、全体の待ち時間を短くする） */
+const PARALLEL = 2
+let running = 0
+const waiting: (() => void)[] = []
+/** 空きができるまで待ってから task を行う（中止されたら、待つのをやめる） */
+async function inTurn<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) throw cancelled()
+  if (running < PARALLEL) running++
+  else await new Promise<void>((resolve, reject) => {
+    const go = () => { signal?.removeEventListener('abort', stop); running++; resolve() }
+    const stop = () => { waiting.splice(waiting.indexOf(go), 1); reject(cancelled()) }
+    waiting.push(go)
+    signal?.addEventListener('abort', stop, { once: true })
+  })
+  try { return await task() } finally { running--; waiting.shift()?.() }
+}
+
+/** PDFのアップロード（DriveからGeminiへの転送）は1件ずつ行う（大きなPDFの転送が同時に走ると、通信が途中で切れやすいため） */
+let uploading: Promise<unknown> = Promise.resolve()
+function oneUploadAtATime<T>(task: () => Promise<T>): Promise<T> {
+  const run = uploading.then(task, task)
+  uploading = run.catch(() => undefined)
   return run
 }
 
@@ -143,7 +160,7 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
       if (!state || state === 'FAILED') { saveUpload(uploadKey, null); name = undefined }
     }
     if (!name) {
-      let result = await requestWithRetry({ step: 'upload', ...source }, auth, signal)
+      let result = await oneUploadAtATime(() => requestWithRetry({ step: 'upload', ...source }, auth, signal))
       if (result.status === 401) throw new SummaryError('failed', 'Googleのログインが切れたため、要約を作れませんでした。「Driveに接続」でログインし直してから、もう一度お試しください。')
       // ファイルごとの許可（確認とGoogleの選択画面）は、ボタンを押してすぐのときだけ行う。
       // 順番待ちのあとに確認を出すと、そこで止まって後ろの本が進まなくなるので、失敗として次へ進む
@@ -153,7 +170,8 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
       if (result.data?.code === 'needs_access' && fileId && DRIVE_CLIENT_ID && !storedReadToken()) {
         if (!confirm('全ページスキャンのファイルを読むために、初回のみファイルへのアクセスを許可する必要があります。\nGoogleの選択画面でそのファイルを選んで「選択」を押してください。')) throw new SummaryError('failed', 'ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
         if (!await grantFileAccess(fileId, '全ページスキャン')) throw new SummaryError('failed', 'ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
-        result = await requestWithRetry({ step: 'upload', ...source }, storedToken() ?? await signIn(), signal)
+        const retryToken = storedToken() ?? await signIn()
+        result = await oneUploadAtATime(() => requestWithRetry({ step: 'upload', ...source }, retryToken, signal))
       }
       if (!result.ok || !result.data?.file) throw failed(result)
       name = result.data.file.name
@@ -180,5 +198,5 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
     // 要約ができたら、サーバーがファイルを削除している
     saveUpload(uploadKey, null)
     return result.data.summary
-  })
+  }, signal)
 }

@@ -1,17 +1,17 @@
 import { useState, type KeyboardEvent, type PointerEvent } from 'react'
-import { ChartPie, ClipboardPaste, ExternalLink, GripVertical, Headphones, Link2, Presentation, ScanLine, Trash2, Video } from 'lucide-react'
-import { CARD_LINK_LIMIT, LINK_PRESETS, SHORT_LABELS, isPreset, isScan, isUrl, presetsFirst, readClipboardUrl, sanitizeUrlInput } from './links'
+import { ChartPie, ClipboardPaste, ExternalLink, GripVertical, Headphones, Link2, MonitorPlay, Presentation, ScanLine, Trash2, Video } from 'lucide-react'
+import { CARD_LINK_LIMIT, LINK_PRESETS, canonicalLabel, isPreset, isScan, isUrl, presetsFirst, readClipboardUrl, sanitizeUrlInput, shortLabel } from './links'
 import type { BookLink } from './types'
 
-const ICONS: Record<string, typeof Link2> = { 'インフォグラフィック': ChartPie, '音声解説': Headphones, '動画解説': Video, '全ページスキャン': ScanLine, 'GeminiNotebookスライド': Presentation }
-function LinkIcon({ label }: { label: string }) { const Icon = ICONS[label.trim()] ?? Link2; return <Icon /> }
+const ICONS: Record<string, typeof Link2> = { 'インフォグラフィック': ChartPie, '音声解説': Headphones, '動画解説': Video, '全ページスキャン': ScanLine, 'GeminiNotebookスライド': Presentation, 'GeminiNotebookスライド動画': MonitorPlay }
+function LinkIcon({ label }: { label: string }) { const Icon = ICONS[canonicalLabel(label)] ?? Link2; return <Icon /> }
 
 /** カード用：URLのあるリンクを先頭から最大6つ（固定のリンクは短い名前で表示） */
 export function CardLinks({ links }: { links: BookLink[] }) {
   const shown = presetsFirst(links).filter(l => l.url).slice(0, CARD_LINK_LIMIT)
   if (!shown.length) return null
   return <div className="link-chips">{shown.map(l => <a key={l.id} href={l.url} target="_blank" rel="noreferrer" className={isScan(l) ? 'scan' : undefined} title={`${l.label || 'リンク'}\n${l.url}`}
-    onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}><LinkIcon label={l.label} />{SHORT_LABELS[l.label.trim()] ?? (l.label || 'リンク')}</a>)}</div>
+    onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}><LinkIcon label={l.label} />{shortLabel(l.label)}</a>)}</div>
 }
 
 export function LinkEditor({ links, onChange }: { links: BookLink[]; onChange: (links: BookLink[]) => void }) {
@@ -50,7 +50,7 @@ export function LinkEditor({ links, onChange }: { links: BookLink[]; onChange: (
         {fixed ? <span className="drag-handle" aria-hidden="true" /> : <button type="button" className="drag-handle" aria-label={`「${link.label || 'リンク'}」を並べ替え（ドラッグ、または↑↓キー）`} title="ドラッグして並べ替え"
           onPointerDown={startDrag(link.id)} onPointerMove={dragOver} onPointerUp={endDrag} onPointerCancel={endDrag} onKeyDown={keyMove(link.id, index)}><GripVertical /></button>}
         {fixed ? <input value={link.label} readOnly className="label-fixed" title="この表示名は変更できません" />
-          : <input value={link.label} onChange={e => { if (!LINK_PRESETS.includes(e.target.value.trim())) update(link.id, { label: e.target.value }) }} placeholder="表示名" />}
+          : <input value={link.label} onChange={e => { if (!LINK_PRESETS.includes(canonicalLabel(e.target.value))) update(link.id, { label: e.target.value }) }} placeholder="表示名" />}
         <span className="url-field"><button type="button" className="url-paste" onClick={() => void pasteUrl(link.id)} aria-label="クリップボードのURLを貼り付け" title="クリップボードのURLを貼り付け"><ClipboardPaste /></button>
           <input type="url" inputMode="url" autoComplete="off" spellCheck={false} value={link.url} onChange={e => typeUrl(link.id, e.target.value)} onBlur={() => leaveUrl(link)} placeholder="https://..." /></span>
         {isUrl(link.url) ? <a href={link.url} target="_blank" rel="noreferrer" aria-label="新しいタブで開く"><ExternalLink /></a> : <span />}

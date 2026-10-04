@@ -3,16 +3,24 @@ import type { BookLink } from './types'
 /** 全ページスキャン。要約の作成にも使う */
 export const SCAN_LABEL = '全ページスキャン'
 /** 固定のリンク欄。表示名は変えられず、この順で先頭に並ぶ（新しい本・編集画面には最初から欄を用意する） */
-export const LINK_PRESETS = [SCAN_LABEL, 'インフォグラフィック', 'GeminiNotebookスライド', '音声解説', '動画解説']
+export const LINK_PRESETS = [SCAN_LABEL, 'インフォグラフィック', 'GeminiNotebookスライド', '音声解説', '動画解説', 'GeminiNotebookスライド動画']
 /** カードに表示するときの短い名前 */
-export const SHORT_LABELS: Record<string, string> = { [SCAN_LABEL]: 'Scan', 'インフォグラフィック': 'InfoG', 'GeminiNotebookスライド': 'Slide', '音声解説': 'Voice', '動画解説': 'Movie' }
+export const SHORT_LABELS: Record<string, string> = { [SCAN_LABEL]: 'Scan', 'インフォグラフィック': 'InfoG', 'GeminiNotebookスライド': 'Slide', '音声解説': 'Voice', '動画解説': 'Movie', 'GeminiNotebookスライド動画': 'SlideM' }
 /** カードに表示するリンクの最大数 */
 export const CARD_LINK_LIMIT = 6
 
 export const newLink = (label = ''): BookLink => ({ id: crypto.randomUUID(), label, url: '' })
 
-export const isScan = (link: BookLink) => link.label.trim() === SCAN_LABEL
-const presetIndex = (link: BookLink) => LINK_PRESETS.indexOf(link.label.trim())
+/** 固定の欄と大文字・小文字だけが違う表示名（例: GeminiNoteBookスライド動画）は、固定の欄の名前にそろえる */
+export function canonicalLabel(label: string): string {
+  const text = label.trim()
+  return LINK_PRESETS.find(p => p.toLowerCase() === text.toLowerCase()) ?? text
+}
+/** カードに表示するときの短い名前 */
+export const shortLabel = (label: string) => SHORT_LABELS[canonicalLabel(label)] ?? (label.trim() || 'リンク')
+
+export const isScan = (link: BookLink) => canonicalLabel(link.label) === SCAN_LABEL
+const presetIndex = (link: BookLink) => LINK_PRESETS.indexOf(canonicalLabel(link.label))
 /** 固定のリンク欄か（表示名の変更・並べ替え・削除はできない） */
 export const isPreset = (link: BookLink) => presetIndex(link) >= 0
 /** 固定のリンクを決まった順で先頭に（ほかのリンクの順番はそのまま） */
@@ -23,8 +31,8 @@ export const presetsFirst = (links: BookLink[]) => [
 
 /** 編集用：まだ無い固定の欄を追加する（固定の欄は決まった順で先頭） */
 export function withPresetRows(links: BookLink[]): BookLink[] {
-  const labels = new Set(links.map(l => l.label.trim()))
-  return presetsFirst([...links.map(l => ({ ...l })), ...LINK_PRESETS.filter(p => !labels.has(p)).map(newLink)])
+  const labels = new Set(links.map(l => canonicalLabel(l.label)))
+  return presetsFirst([...links.map(l => ({ ...l, label: canonicalLabel(l.label) })), ...LINK_PRESETS.filter(p => !labels.has(p)).map(newLink)])
 }
 
 // URLに使える文字（半角英数字と記号）だけを対象にする。日本語や空白はURLの外とみなす
@@ -42,7 +50,7 @@ export function sanitizeUrlInput(value: string): string | null {
 
 /** 保存用：URLが空・URLとして正しくない欄を取り除く */
 export function cleanLinks(links: BookLink[]): BookLink[] {
-  return presetsFirst(links.map(l => ({ id: l.id, label: l.label.trim(), url: l.url.trim() })).filter(l => isUrl(l.url)))
+  return presetsFirst(links.map(l => ({ id: l.id, label: canonicalLabel(l.label), url: l.url.trim() })).filter(l => isUrl(l.url)))
 }
 
 

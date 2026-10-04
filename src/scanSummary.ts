@@ -125,8 +125,14 @@ async function request(body: Body, token: string | null, signal?: AbortSignal, l
   return { ok: res.ok, status: res.status, data }
 }
 
-const failed = (result: { status: number; data: ResponseData | null }) =>
-  new SummaryError(result.data?.code === 'timeout' ? 'timeout' : result.data?.code === 'mismatch' ? 'mismatch' : 'failed', result.data?.error || `要約を作れませんでした（${result.status}）`)
+/** Gemini API の残高が尽きた（402）とき、その後しばらくは頼まずに同じ理由で失敗にする（順番待ちの本が1冊ずつ同じエラーを出し続けないように） */
+let billingError: { message: string; at: number } | null = null
+
+function failed(result: { status: number; data: ResponseData | null }): SummaryError {
+  const message = result.data?.error || `要約を作れませんでした（${result.status}）`
+  if (result.data?.code === 'billing') billingError = { message, at: Date.now() }
+  return new SummaryError(result.data?.code === 'timeout' ? 'timeout' : result.data?.code === 'mismatch' ? 'mismatch' : 'failed', message)
+}
 
 // ---- アップロードしたファイルの記録 ----
 // 時間切れ・失敗のあとにやり直すとき、Gemini へのアップロード（大きなPDFでは時間がかかる）を省くため、
@@ -166,6 +172,7 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
   return inTurn(async () => {
     // 順番を待つあいだに中止されていれば、始めずに終わる
     if (signal?.aborted) throw cancelled()
+    if (billingError && Date.now() - billingError.at < 60_000) throw new SummaryError('failed', billingError.message)
     onStart?.()
     // 順番を待つあいだにトークンが切れていたら、受け取り直してから使う（押したときのトークンを使い続けると、後ろの本ほど失敗する）
     const auth = await freshToken(token)

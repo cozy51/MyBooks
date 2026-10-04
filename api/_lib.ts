@@ -26,6 +26,8 @@ export class UpstreamError extends Error {
 export function upstreamFailure(e: unknown, label: string) {
   const status = e instanceof UpstreamError ? e.status : 0
   console.error(`${label} failed`, status, e instanceof Error ? e.message : e, e instanceof Error && e.cause ? e.cause : '')
+  // Gemini API の前払いクレジットが尽きたとき（再試行しても直らないので、すぐに知らせる）
+  if (status === 402) return reply(402, { error: 'Gemini API の残高（前払いクレジット）が足りないため、AIを使えませんでした。Google AI Studio（https://aistudio.google.com）の「Billing」でクレジットを追加してください。', code: 'billing' })
   if (status === 429) return reply(429, { error: `${label}の利用上限に達しました。少し待ってから再試行してください。`, code: 'rate_limited' })
   // 通信が途中で切れた・相手側の一時的な障害は、しばらくして再試行すれば成功することが多い
   return reply(502, { error: `${label}の呼び出しに失敗しました（${status || '通信エラー'}）`, ...((!status || status >= 500) && { code: 'temporary' }) })

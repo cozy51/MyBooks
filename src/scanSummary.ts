@@ -15,8 +15,8 @@ export async function readToken(): Promise<string | null> {
 
 interface ResponseData { summary?: string; error?: string; code?: string; file?: { name: string; state?: string } }
 
-/** 要約を作れなかった理由（timeout: 時間切れ / failed: そのほかの失敗 / cancelled: 中止した） */
-export type SummaryFailure = 'timeout' | 'failed' | 'cancelled'
+/** 要約を作れなかった理由（timeout: 時間切れ / failed: そのほかの失敗 / cancelled: 中止した / mismatch: スキャンが別の本だった） */
+export type SummaryFailure = 'timeout' | 'failed' | 'cancelled' | 'mismatch'
 export class SummaryError extends Error {
   kind: SummaryFailure
   constructor(kind: SummaryFailure, message: string, options?: ErrorOptions) { super(message, options); this.kind = kind }
@@ -107,7 +107,7 @@ async function request(body: Body, token: string | null, signal?: AbortSignal): 
 }
 
 const failed = (result: { status: number; data: ResponseData | null }) =>
-  new SummaryError(result.data?.code === 'timeout' ? 'timeout' : 'failed', result.data?.error || `要約を作れませんでした（${result.status}）`)
+  new SummaryError(result.data?.code === 'timeout' ? 'timeout' : result.data?.code === 'mismatch' ? 'mismatch' : 'failed', result.data?.error || `要約を作れませんでした（${result.status}）`)
 
 // ---- アップロードしたファイルの記録 ----
 // 時間切れ・失敗のあとにやり直すとき、Gemini へのアップロード（大きなPDFでは時間がかかる）を省くため、
@@ -193,7 +193,8 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
     // 3. 要約を作る（時間切れなら、アップロードしたファイルのまま1回だけやり直す）
     let result = await requestWithRetry({ step: 'summarize', name, title, author }, storedReadToken() ?? storedToken() ?? auth, signal)
     if (result.data?.code === 'timeout') result = await requestWithRetry({ step: 'summarize', name, title, author }, storedReadToken() ?? storedToken() ?? auth, signal)
-    if (result.data?.code === 'file_gone') saveUpload(uploadKey, null)
+    // ファイルが消えていた・別の本だった（サーバーが削除済み）ときは、次はアップロードからやり直す
+    if (result.data?.code === 'file_gone' || result.data?.code === 'mismatch') saveUpload(uploadKey, null)
     if (!result.ok || !result.data?.summary) throw failed(result)
     // 要約ができたら、サーバーがファイルを削除している
     saveUpload(uploadKey, null)

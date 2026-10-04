@@ -93,12 +93,29 @@ async function uploadToGemini(deadline: number, p: Provider, source: Source, wai
   return file
 }
 
-const instructions = (title: string, author: string) => `これは本「${title}」${author ? `（著者: ${author}）` : ''}の全ページをスキャンしたファイルです。
-本の内容を読み、日本語で要約してください。
-- 300〜400字程度の1段落の文章にする（見出し・箇条書き・記号による装飾は使わない）
+const summaryRules = `- 300〜400字程度の1段落の文章にする（見出し・箇条書き・記号による装飾は使わない）
 - 何についての本か（主題）、著者の主な主張、読者が得られる具体的な考え方や方法を中心にまとめる
 - 目次や奥付、広告ページの内容は含めない
-- 要約の文章だけを出力する（「（392字）」のような文字数の表記や、前置き・見出しは付けない）`
+- 要約の文章だけにする（「（392字）」のような文字数の表記や、前置き・見出しは付けない）`
+
+const instructions = (title: string, author: string) => `これは本「${title}」${author ? `（著者: ${author}）` : ''}の全ページをスキャンしたファイルです。
+本の内容を読み、日本語で要約してください。
+${summaryRules}
+- 要約の文章だけを出力する`
+
+/** 要約と一緒に、スキャンが指定した本と同じ本かを確かめてもらう（リンク先が別の本のファイルだったときに、違う本の要約を保存しないため） */
+const checkedInstructions = (title: string, author: string) => `これは本の全ページをスキャンしたファイルです。
+登録されている本：「${title}」${author ? `（著者: ${author}）` : ''}
+次の項目を JSON で答えてください。
+- scannedTitle：スキャンの表紙・扉・奥付などに書かれている書名
+- sameBook：スキャンの本が、登録されている本と同じ本か（サブタイトルの有無・表記の違い・版の違い・タイトルの一部だけの登録は同じ本とみなす。明らかに別の本のときだけ false）
+- summary：スキャンの本の内容の日本語の要約
+${summaryRules}`
+
+const CHECK_SCHEMA = { type: 'OBJECT', properties: { scannedTitle: { type: 'STRING' }, sameBook: { type: 'BOOLEAN' }, summary: { type: 'STRING' } }, required: ['scannedTitle', 'sameBook', 'summary'] }
+
+/** sameBook: スキャンが登録されている本と同じ本か（確かめられなかったときは undefined） */
+interface SummaryResult { summary: string; scannedTitle?: string; sameBook?: boolean }
 
 /** AIが付けることがある文字数の表記（例: （392字）・(約400文字)・文字数：392字）や「要約：」の前置きを取り除く */
 export function cleanSummary(text: string): string {
@@ -117,28 +134,36 @@ function mediaResolution(): string | undefined {
   return ['low', 'medium', 'high'].includes(value) ? `MEDIA_RESOLUTION_${value.toUpperCase()}` : undefined
 }
 
-async function summarize(deadline: number, p: Provider, file: { uri: string; mimeType: string }, title: string, author: string): Promise<string> {
+async function summarize(deadline: number, p: Provider, file: { uri: string; mimeType: string }, title: string, author: string): Promise<SummaryResult> {
   for (const model of geminiModels(process.env.SUMMARY_MODEL)) {
     // 未対応の設定で断られたら、その設定を外して同じモデルでやり直す
     let thinking = true
     let resolution = mediaResolution()
+    // タイトルが分かっていれば、同じ本かどうかも JSON で答えてもらう
+    let checked = Boolean(title)
     for (;;) {
-      const generationConfig = { ...(thinking && { thinkingConfig: { thinkingLevel: 'low' } }), ...(resolution && { mediaResolution: resolution }) }
+      const generationConfig = { ...(thinking && { thinkingConfig: { thinkingLevel: 'low' } }), ...(resolution && { mediaResolution: resolution }), ...(checked && { responseMimeType: 'application/json', responseSchema: CHECK_SCHEMA }) }
       const res = await fetchBefore(deadline, `${GEMINI}/v1beta/models/${model}:generateContent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': p.key },
         body: JSON.stringify({
-          contents: [{ parts: [{ file_data: { mime_type: file.mimeType, file_uri: file.uri } }, { text: instructions(title, author) }] }],
+          contents: [{ parts: [{ file_data: { mime_type: file.mimeType, file_uri: file.uri } }, { text: (checked ? checkedInstructions : instructions)(title, author) }] }],
           ...(Object.keys(generationConfig).length && { generationConfig }),
         }),
       })
       if (res.ok) {
         const data = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
-        return cleanSummary(data.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('') ?? '')
+        const text = data.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('') ?? ''
+        if (!checked) return { summary: cleanSummary(text) }
+        try {
+          const result = JSON.parse(text) as { scannedTitle?: unknown; sameBook?: unknown; summary?: unknown }
+          return { summary: cleanSummary(typeof result.summary === 'string' ? result.summary : ''), scannedTitle: typeof result.scannedTitle === 'string' ? result.scannedTitle.trim() : undefined, sameBook: typeof result.sameBook === 'boolean' ? result.sameBook : undefined }
+        } catch { return { summary: cleanSummary(text) } }
       }
       const detail = await res.text()
       if (res.status === 400 && thinking && /thinking/i.test(detail)) { thinking = false; continue } // thinkingLevel 未対応のモデル
       if (res.status === 400 && resolution && /media.?resolution/i.test(detail)) { resolution = undefined; continue } // mediaResolution 未対応のモデル
+      if (res.status === 400 && checked && /response.?(schema|mime)/i.test(detail)) { checked = false; continue } // JSON の出力に未対応のモデル
       if (res.status === 404) break // このモデルは使えないので次へ
       throw new UpstreamError(res.status, detail)
     }
@@ -171,9 +196,10 @@ export async function POST(request: Request): Promise<Response> {
       return reply(200, { file: { name: file.name, state: file.state ?? 'ACTIVE' } })
     }
     uploaded = await uploadToGemini(deadline, p, source)
-    const summary = await summarize(deadline, p, uploaded, title, author)
-    if (!summary) return reply(422, { error: '要約を作れませんでした。スキャンの内容を確認してください。' })
-    return reply(200, { summary })
+    const result = await summarize(deadline, p, uploaded, title, author)
+    if (result.sameBook === false) return mismatch(result, title)
+    if (!result.summary) return reply(422, { error: '要約を作れませんでした。スキャンの内容を確認してください。' })
+    return reply(200, { summary: result.summary, scannedTitle: result.scannedTitle })
   } catch (e) {
     return failure(e)
   } finally {
@@ -197,12 +223,20 @@ async function fileStep(deadline: number, p: Provider, step: 'status' | 'summari
     if (file.state === 'PROCESSING') return reply(409, { error: 'ファイルの準備中です。', code: 'processing' })
     const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) : ''
     const author = typeof body.author === 'string' ? body.author.trim().slice(0, 200) : ''
-    const summary = await summarize(deadline, p, file, title, author)
-    if (!summary) return reply(422, { error: '要約を作れませんでした。スキャンの内容を確認してください。' })
+    const result = await summarize(deadline, p, file, title, author)
+    // 別の本のファイルだったときは、要約を返さない（ファイルも使わないので削除する）
+    if (result.sameBook === false) { await remove(); return mismatch(result, title) }
+    if (!result.summary) return reply(422, { error: '要約を作れませんでした。スキャンの内容を確認してください。' })
     await remove()
-    return reply(200, { summary })
+    return reply(200, { summary: result.summary, scannedTitle: result.scannedTitle })
   } catch (e) { return failure(e) }
 }
+
+/** スキャンが別の本だったとき */
+const mismatch = (result: SummaryResult, title: string) => reply(409, {
+  error: `全ページスキャンの中身は「${result.scannedTitle || '別の本'}」で、この本（${title}）とは違うため、要約を保存しませんでした。全ページスキャンのリンク先を確認してください。`,
+  code: 'mismatch', scannedTitle: result.scannedTitle,
+})
 
 /** 失敗を、画面に出せるメッセージにする */
 function failure(e: unknown): Response {

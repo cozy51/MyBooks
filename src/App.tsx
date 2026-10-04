@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, Check, ChevronLeft, ChevronRight, CircleAlert, CircleStop, ClipboardPaste, Clock, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, ScanText, Undo2, Search, Settings, Sparkles, Trash2, Upload, UserRound, X } from 'lucide-react'
+import { BookOpen, Check, ChevronLeft, ChevronRight, CircleAlert, CircleStop, ScanLine, ClipboardPaste, Clock, Copy, Cloud, CloudAlert, CloudCheck, CloudOff, CloudUpload, Download, ExternalLink, FolderOpen, GripVertical, Grid2X2, List, LoaderCircle, Map as MapIcon, LogOut, RefreshCw, Plus, ScanText, Undo2, Search, Settings, Sparkles, Trash2, Upload, UserRound, X } from 'lucide-react'
 import { COVER_FOLDER_ID, COVER_FOLDER_URL, driveFileId, driveFileUrl, normalizeCover } from './cover'
 import { categories, sampleBooks, statusClass } from './data'
 import { CoverImage, type Zoom } from './CoverImage'
@@ -10,7 +10,7 @@ import { SameAuthorBooks, SimilarBooks } from './RelatedBooks'
 import { readCoverInfo, type CoverInfo } from './coverInfo'
 import { cleanLinks, isScan, isUrl, newLink, withPresetRows } from './links'
 import { readToken, SummaryError, summarizeScan, type SummaryFailure } from './scanSummary'
-import { scanFileName, titleMatches } from './scanCheck'
+import { scanFileName } from './scanCheck'
 import { rankBooks, wantsSemantic } from './semanticSearch'
 import { useSemanticSearch } from './useSemanticSearch'
 import type { Book, BookLink, ReadingStatus } from './types'
@@ -203,16 +203,6 @@ function App() {
           notify(`「${title}」の${changed.map(key => FILL_LABEL[key]).join('・')}を表紙から入力しました${scanUrl ? '。続けて要約を作成します' : ''}`)
         } else if (!scanUrl) notify(`「${title}」は表紙の内容と一致しています`)
       } catch (e) { notify(`表紙から読み取れませんでした（${e instanceof Error ? e.message : String(e)}）${scanUrl ? '。入力済みのタイトル・著者で要約を作ります' : ''}`, true) }
-    }
-    // 全ページスキャンのリンク先が別の本のファイルになっていないか確かめる（違う本の要約を作って保存しないように）
-    const link = scanLink(book.links)
-    const fileName = link ? await scanFileName(link) : null
-    if (titleMatches(fileName, target.title) === false) {
-      dropJob(book.id)
-      const title = target.title.trim() || 'タイトル未入力の本'
-      setIssue(book.id, { kind: 'mismatch', message: `全ページスキャンのファイル名「${fileName}」が、本のタイトル「${title}」と合いません。リンク先が別の本のファイルになっていないか確認してください。`, at: new Date().toISOString() })
-      notify(`「${title}」の全ページスキャンのリンク先が、別の本のファイル（${fileName}）になっているかもしれません。${scanUrl ? '要約は作りませんでした。' : ''}リンクを確認してください`, true)
-      return
     }
     if (scanUrl && job.abort.signal.aborted) {
       dropJob(book.id)
@@ -503,7 +493,7 @@ function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onS
   const summarizing = summaryJob?.status === 'running' || summaryJob?.status === 'queued'
   const summarizeElapsed = useElapsed(summaryJob?.status === 'running', summaryJob?.startedAt)
   const confirmReplaceMemo = () => !draft.memo.trim() || confirm(REPLACE_MEMO)
-  // 全ページスキャンのファイル名を表示し、タイトルと合わないとき（別の本のファイルらしいとき）は知らせる
+  // 全ページスキャンのファイル名を表示する（別の本のファイルになっていないか、目で確かめられるように）
   const [scanFile, setScanFile] = useState<{ url: string; name: string | null }>()
   useEffect(() => {
     if (!scanUrl) return
@@ -512,11 +502,8 @@ function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onS
     return () => { cancelled = true; clearTimeout(timer) }
   }, [scanUrl])
   const scanName = scanFile && scanFile.url === scanUrl ? scanFile.name : null
-  const scanMatch = titleMatches(scanName, draft.title)
-  const confirmScanFile = (title: string) => titleMatches(scanName, title) !== false || confirm(`全ページスキャンのファイル名「${scanName}」が、本のタイトル「${title}」と合いません。別の本のファイルかもしれません。\nこのまま要約を作りますか？`)
   const makeSummary = () => {
     if (!scanUrl || summarizing) return
-    if (!confirmScanFile(draft.title)) return
     if (!confirmReplaceMemo()) return
     onSummarize(draft, scanUrl)
   }
@@ -533,7 +520,6 @@ function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onS
       const info = await readCoverInfo({ cover: draft.cover })
       book = { ...draft, title: applyCoverInfo(info), author: info.author || draft.author }
     } catch (e) { setReadNote(`表紙から読み取れませんでした（${e instanceof Error ? e.message : String(e)}）。入力済みのタイトル・著者で要約を作ります。`) } finally { setReading(false) }
-    if (!confirmScanFile(book.title)) return
     onSummarize(book, scanUrl)
   }
   // この画面を開いている間にできあがった要約は、要約欄に入れて確認できるようにする
@@ -593,7 +579,7 @@ function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onS
       <div className="cover-actions">{canPasteCover && <button type="button" className="secondary-btn" onClick={() => void pasteCover()} disabled={uploading}>{uploading ? <LoaderCircle className="spin" /> : <ClipboardPaste />} {uploading ? 'アップロード中…' : '画像を貼り付け'}</button>}{canPickCover && <button type="button" className="secondary-btn" onClick={pickCover}><FolderOpen /> Driveから選ぶ</button>}<a href={driveFileUrl(draft.cover) ?? COVER_FOLDER_URL} target="_blank" rel="noreferrer"><ExternalLink />{driveFileUrl(draft.cover) ? 'Driveで開く' : '表紙フォルダを開く'}</a></div>
       <small className="cover-hint">{canPasteCover && 'コピーした画像は、表紙フォルダに「タイトル名」のファイルとして保存されます（Ctrl+Vでも可）。'}表紙フォルダの画像はファイルIDで保存します。共有リンクを貼るとIDに変換されます。表示するには、フォルダの共有設定を「リンクを知っている全員」にしてください。</small></div></div>
     <div className="fields"><div className="autofill-bar"><button type="button" className="autofill-btn" onClick={() => void readCover()} disabled={reading} title="表紙の画像の文字を読み取り、タイトル・著者・分類を入力します">{reading ? <LoaderCircle className="spin" /> : <ScanText />}{reading ? `読み取り中…${elapsed ? ` ${elapsed}秒` : ''}` : '表紙から入力'}</button><button type="button" className="autofill-btn" onClick={() => void readCoverAndSummarize()} disabled={reading || summarizing || !scanUrl} title={scanUrl ? '表紙からタイトル・著者・分類を入力し、続けて全ページスキャンから要約を作ります' : '関連リンクの「全ページスキャン」にURLを入れると使えます'}><Sparkles />表紙から入力＋要約</button><span>タイトル・著者・分類を表紙の画像から読み取ります</span>{readNote && <small className="field-note">{readNote}</small>}</div><label>タイトル <em>必須</em>{fillMark('title')}<input className={duplicate ? 'invalid' : fill('title')} required autoFocus={isNew} value={draft.title} onChange={e => update('title', e.target.value)} placeholder="本のタイトル" />{fillBefore('title')}{duplicate && <small className="field-error">{duplicate.reason === 'url' ? '同じURLの関連リンクを持つ本' : '同じ本'}がすでに登録されています（{duplicate.book.title}{duplicate.book.author && ` / ${duplicate.book.author}`}）</small>}</label><label>著者{fillMark('author')}<input className={fill('author')} value={draft.author} onChange={e => update('author', e.target.value)} placeholder="著者名" />{fillBefore('author')}</label><div className="field-row"><label>分類{fillMark('categoryId')}<select className={fill('categoryId')} value={draft.categoryId} onChange={e => update('categoryId', e.target.value)}>{categories.filter(c => c.parent).map(c => { const p = categories.find(p => p.id === c.parent); return <option value={c.id} key={c.id}>{p?.name} ＞ {c.name}</option> })}</select>{fillBefore('categoryId')}</label><label>基準月<input className={monthError ? 'invalid' : undefined} list="base-month-options" inputMode="numeric" autoComplete="off" placeholder="YYYY-MM（空欄可）" value={draft.baseMonth} onChange={e => { update('baseMonth', e.target.value); setMonthError(false) }} onBlur={fixMonth} />{monthError && <small className="field-error">YYYY-MM の形式で入力してください（例：2026-09）</small>}<datalist id="base-month-options">{monthOptions.map(m => <option key={m} value={m} />)}</datalist></label></div><label>読書状況<select value={draft.status} onChange={e => update('status', e.target.value as ReadingStatus)}><option>未読</option><option>読書中</option><option>読了</option></select></label><label>要約{!filled.has('memo') && <button type="button" className="label-action" onClick={summarizing ? onCancelSummary : makeSummary} disabled={!scanUrl && !summarizing} title={summarizing ? '押すと要約の作成を中止します' : scanUrl ? '関連リンクの「全ページスキャン」のファイルを読み、要約を作ります' : '関連リンクの「全ページスキャン」にURLを入れると使えます'}>{summarizing ? <LoaderCircle className="spin" /> : <Sparkles />}{summaryJob?.status === 'queued' ? '要約待ち…（押すと中止）' : summarizing ? `要約を作成中…${summarizeElapsed ? ` ${summarizeElapsed}秒` : ''}（押すと中止）` : '全ページスキャンから要約'}</button>}{fillMark('memo')}<textarea className={fill('memo')} rows={filled.has('memo') ? 8 : 4} value={draft.memo} onChange={e => update('memo', e.target.value)} placeholder={summarizing ? '全ページスキャンから要約を作成しています…' : '本の要約'} disabled={summarizing} />{summarizing ? <small className="field-note">{summaryJob?.status === 'queued' ? 'ほかの本の要約が終わるのを待っています（2冊ずつ順番に作ります）。' : '要約の作成には数十秒〜数分かかります。'}この画面を閉じても処理は続き、終わると自動で保存されます。</small> : summaryIssue && <small className={`field-note summary-issue-note ${summaryIssue.kind}`}>前回（{issueTime(summaryIssue.at)}）：{ISSUE_LABEL[summaryIssue.kind]}／{summaryIssue.message}</small>}{fillBefore('memo')}</label></div></div>
-    <div className="links-section"><div className="section-title"><div><h3>関連リンク</h3><p>上の6つは固定の欄です。追加したリンクは左端の <GripVertical className="inline-icon" /> をドラッグして並べ替えられます。URLが空の欄は保存されません。</p>{duplicate?.reason === 'url' && <p className="field-error">同じURLのリンクが「{duplicate.book.title}」に登録されています</p>}</div><button type="button" className="secondary-btn" onClick={addLink}><Plus /> リンクを追加</button></div><LinkEditor links={draft.links} onChange={links => update('links', links)} />{scanUrl && scanName && <p className={`scan-file${scanMatch === false ? ' mismatch' : scanMatch ? ' match' : ''}`}>{scanMatch === false ? <CircleAlert /> : <Check />}全ページスキャンのファイル名：{scanName}{scanMatch === false ? `（本のタイトル「${draft.title.trim() || '未入力'}」と合いません。別の本のファイルになっていないか確認してください）` : scanMatch ? '（タイトルと一致）' : ''}</p>}</div>
+    <div className="links-section"><div className="section-title"><div><h3>関連リンク</h3><p>上の6つは固定の欄です。追加したリンクは左端の <GripVertical className="inline-icon" /> をドラッグして並べ替えられます。URLが空の欄は保存されません。</p>{duplicate?.reason === 'url' && <p className="field-error">同じURLのリンクが「{duplicate.book.title}」に登録されています</p>}</div><button type="button" className="secondary-btn" onClick={addLink}><Plus /> リンクを追加</button></div><LinkEditor links={draft.links} onChange={links => update('links', links)} />{scanUrl && scanName && <p className="scan-file"><ScanLine />全ページスキャンのファイル名：{scanName}</p>}</div>
     <div className="modal-actions">{!isNew && <button type="button" className="danger-btn" onClick={() => onDelete(draft.id)}><Trash2 /> 削除</button>}<span /><button type="button" className="ghost-btn" onClick={onClose}>キャンセル</button><button className="primary-btn" disabled={Boolean(duplicate)}>{isNew ? '本を登録する' : '変更を保存'}</button></div>
   </form></section></div>
 }

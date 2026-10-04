@@ -4,7 +4,12 @@
 // 3. アップロードしたファイルを読ませて要約を作り、終わったらファイルを削除する
 //   SUMMARY_MODEL … モデル名を変えるときだけ設定（既定: gemini-flash-latest）
 //   SUMMARY_MEDIA_RESOLUTION … PDFを読む解像度（low / medium / high / default。既定: low で速さ優先）
-// リクエスト: { fileId?: DriveのファイルID, url?: 公開されたPDFのURL, title, author }
+// リクエスト: { fileId?: DriveのファイルID, url?: 公開されたPDFのURL, title, author }（1〜3をまとめて行う）
+// 大きなPDFでも時間切れになりにくいよう、段階ごとに分けて呼ぶこともできる（それぞれに約280秒の制限時間がある）
+//   { step: 'upload', fileId?, url? } … 1・2だけ行い、Gemini のファイル { name, state } を返す（読める状態になるのは待たない）
+//   { step: 'status', name } … Gemini のファイルの状態（PROCESSING / ACTIVE / FAILED）を返す
+//   { step: 'summarize', name, title, author } … 3だけ行う。要約ができたらファイルを削除する（時間切れのときは残すので、やり直せる）
+//   { step: 'cleanup', name } … ファイルを削除する
 import { authorized, fetchBefore, geminiModels, notConfigured, provider, reply, unauthorized, upstreamFailure, UpstreamError, type Provider } from './_lib.js'
 
 /** 全体の制限時間（vercel.json の実行上限300秒より短くし、必ず応答を返す） */
@@ -42,8 +47,18 @@ async function openSource(deadline: number, token: string | undefined, fileId: s
   throw new NeedsAccess()
 }
 
-/** Gemini の File API へ、ストリームのままアップロードする */
-async function uploadToGemini(deadline: number, p: Provider, source: Source): Promise<{ name: string; uri: string; mimeType: string }> {
+interface GeminiFile { name: string; uri: string; mimeType: string; state?: string }
+const GEMINI_FILE = /^files\/[\w-]+$/
+
+async function getGeminiFile(deadline: number, p: Provider, name: string): Promise<GeminiFile | null> {
+  const res = await fetchBefore(deadline, `${GEMINI}/v1beta/${name}`, { headers: { 'x-goog-api-key': p.key } })
+  if (res.status === 404 || res.status === 403) return null
+  if (!res.ok) throw new UpstreamError(res.status, await res.text())
+  return await res.json() as GeminiFile
+}
+
+/** Gemini の File API へ、ストリームのままアップロードする（waitActive: 読める状態になるまで待つか） */
+async function uploadToGemini(deadline: number, p: Provider, source: Source, waitActive = true): Promise<GeminiFile> {
   let body: ReadableStream<Uint8Array> | Uint8Array = source.body
   let size = source.size
   if (!size) {
@@ -66,9 +81,9 @@ async function uploadToGemini(deadline: number, p: Provider, source: Source): Pr
     duplex: 'half',
   } as RequestInit)
   if (!res.ok) throw new UpstreamError(res.status, await res.text())
-  let file = (await res.json() as { file: { name: string; uri: string; mimeType: string; state?: string } }).file
+  let file = (await res.json() as { file: GeminiFile }).file
   // 大きなPDFは、読める状態（ACTIVE）になるまで少し時間がかかる
-  while (file.state === 'PROCESSING') {
+  while (waitActive && file.state === 'PROCESSING') {
     await new Promise(r => setTimeout(r, 3000))
     const check = await fetchBefore(deadline, `${GEMINI}/v1beta/${file.name}`, { headers: { 'x-goog-api-key': p.key } })
     if (!check.ok) throw new UpstreamError(check.status, await check.text())
@@ -138,8 +153,9 @@ export async function POST(request: Request): Promise<Response> {
   if (p.name !== 'gemini') return reply(501, { error: '全ページスキャンからの要約は、Gemini（GEMINI_API_KEY）を設定した場合だけ使えます。' })
   if (!await authorized(request)) return unauthorized()
 
-  let body: { fileId?: unknown; url?: unknown; title?: unknown; author?: unknown }
+  let body: { step?: unknown; name?: unknown; fileId?: unknown; url?: unknown; title?: unknown; author?: unknown }
   try { body = await request.json() } catch { return reply(400, { error: 'リクエストの形式が正しくありません' }) }
+  if (body.step === 'status' || body.step === 'summarize' || body.step === 'cleanup') return fileStep(deadline, p, body.step, body)
   const fileId = typeof body.fileId === 'string' && DRIVE_ID.test(body.fileId) ? body.fileId : undefined
   const url = typeof body.url === 'string' ? body.url.trim() : undefined
   if (!fileId && !url) return reply(400, { error: '全ページスキャンのリンクがありません' })
@@ -147,22 +163,53 @@ export async function POST(request: Request): Promise<Response> {
   const author = typeof body.author === 'string' ? body.author.trim().slice(0, 200) : ''
   const token = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1]
 
-  let uploaded: { name: string; uri: string; mimeType: string } | undefined
+  let uploaded: GeminiFile | undefined
   try {
     const source = await openSource(deadline, token, fileId, url)
+    if (body.step === 'upload') {
+      const file = await uploadToGemini(deadline, p, source, false)
+      return reply(200, { file: { name: file.name, state: file.state ?? 'ACTIVE' } })
+    }
     uploaded = await uploadToGemini(deadline, p, source)
     const summary = await summarize(deadline, p, uploaded, title, author)
     if (!summary) return reply(422, { error: '要約を作れませんでした。スキャンの内容を確認してください。' })
     return reply(200, { summary })
   } catch (e) {
-    if (e instanceof NeedsAccess) return reply(403, { error: '全ページスキャンのファイルを読めませんでした。ファイルへのアクセスを許可してください。', code: 'needs_access' })
-    if (e instanceof UpstreamError && e.status === 504) return reply(504, { error: '要約の作成が時間内に終わりませんでした。ページ数が多い場合は時間がかかります。もう一度お試しください。', code: 'timeout' })
-    if (e instanceof UpstreamError && e.status === 413) return reply(413, { error: 'ファイルが大きすぎます（2GBまで）。' })
-    if (e instanceof UpstreamError && e.status === 400) return reply(422, { error: 'このファイルは要約に使えませんでした（PDFのページ数が多すぎる・形式が対応していないなど）。' })
-    if (e instanceof UpstreamError && e.status === 404) return reply(502, { error: '要約に使うAIモデルが見つかりませんでした。環境変数 SUMMARY_MODEL に利用できるモデル名を設定してください。', code: 'model_unavailable' })
-    return upstreamFailure(e, '全ページスキャンからの要約')
+    return failure(e)
   } finally {
     // アップロードしたファイルは要約が終わったら削除する（48時間で自動削除もされる）
     if (uploaded) await fetch(`${GEMINI}/v1beta/${uploaded.name}`, { method: 'DELETE', headers: { 'x-goog-api-key': p.key } }).catch(() => undefined)
   }
+}
+
+/** アップロード済みの Gemini のファイルを使う段階（状態の確認・要約・削除） */
+async function fileStep(deadline: number, p: Provider, step: 'status' | 'summarize' | 'cleanup', body: { name?: unknown; title?: unknown; author?: unknown }): Promise<Response> {
+  const name = typeof body.name === 'string' && GEMINI_FILE.test(body.name) ? body.name : undefined
+  if (!name) return reply(400, { error: 'ファイルの指定が正しくありません' })
+  const remove = () => fetch(`${GEMINI}/v1beta/${name}`, { method: 'DELETE', headers: { 'x-goog-api-key': p.key } }).catch(() => undefined)
+  try {
+    if (step === 'cleanup') { await remove(); return reply(200, { ok: true }) }
+    const file = await getGeminiFile(deadline, p, name)
+    // 48時間が過ぎて消えたファイルなど。アップロードからやり直してもらう
+    if (!file) return reply(410, { error: 'アップロードしたファイルが見つかりません。', code: 'file_gone' })
+    if (step === 'status') return reply(200, { file: { name: file.name, state: file.state ?? 'ACTIVE' } })
+    if (file.state === 'FAILED') { await remove(); return reply(422, { error: 'このファイルは要約に使えませんでした（形式が対応していないなど）。' }) }
+    if (file.state === 'PROCESSING') return reply(409, { error: 'ファイルの準備中です。', code: 'processing' })
+    const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) : ''
+    const author = typeof body.author === 'string' ? body.author.trim().slice(0, 200) : ''
+    const summary = await summarize(deadline, p, file, title, author)
+    if (!summary) return reply(422, { error: '要約を作れませんでした。スキャンの内容を確認してください。' })
+    await remove()
+    return reply(200, { summary })
+  } catch (e) { return failure(e) }
+}
+
+/** 失敗を、画面に出せるメッセージにする */
+function failure(e: unknown): Response {
+  if (e instanceof NeedsAccess) return reply(403, { error: '全ページスキャンのファイルを読めませんでした。ファイルへのアクセスを許可してください。', code: 'needs_access' })
+  if (e instanceof UpstreamError && e.status === 504) return reply(504, { error: '要約の作成が時間内に終わりませんでした。ページ数が多い場合は時間がかかります。もう一度お試しください。', code: 'timeout' })
+  if (e instanceof UpstreamError && e.status === 413) return reply(413, { error: 'ファイルが大きすぎます（2GBまで）。' })
+  if (e instanceof UpstreamError && e.status === 400) return reply(422, { error: 'このファイルは要約に使えませんでした（PDFのページ数が多すぎる・形式が対応していないなど）。' })
+  if (e instanceof UpstreamError && e.status === 404) return reply(502, { error: '要約に使うAIモデルが見つかりませんでした。環境変数 SUMMARY_MODEL に利用できるモデル名を設定してください。', code: 'model_unavailable' })
+  return upstreamFailure(e, '全ページスキャンからの要約')
 }

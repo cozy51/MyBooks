@@ -8,7 +8,7 @@
 // 大きなPDFでも時間切れになりにくいよう、段階ごとに分けて呼ぶこともできる（それぞれに約280秒の制限時間がある）
 //   { step: 'upload', fileId?, url? } … 1・2だけ行い、Gemini のファイル { name, state } を返す（読める状態になるのは待たない）
 //   { step: 'status', name } … Gemini のファイルの状態（PROCESSING / ACTIVE / FAILED）を返す
-//   { step: 'summarize', name, title, author } … 3だけ行う。要約ができたらファイルを削除する（時間切れのときは残すので、やり直せる）
+//   { step: 'summarize', name, title, author } … 3だけ行う（ファイルは削除しない。要約を受け取ったブラウザが cleanup で消す）
 //   { step: 'cleanup', name } … ファイルを削除する
 import { authorized, fetchBefore, geminiModels, notConfigured, provider, reply, unauthorized, upstreamFailure, UpstreamError, type Provider } from './_lib.js'
 
@@ -227,7 +227,8 @@ async function fileStep(deadline: number, p: Provider, step: 'status' | 'summari
     // 別の本のファイルだったときは、要約を返さない（ファイルも使わないので削除する）
     if (result.sameBook === false) { await remove(); return mismatch(result, title) }
     if (!result.summary) return reply(422, { error: '要約を作れませんでした。スキャンの内容を確認してください。' })
-    await remove()
+    // ファイルは消さない（ブラウザが固まった依頼を打ち切ってやり直すことがあり、やり直しの側がまだ使っているかもしれないため。
+    // 要約を受け取ったブラウザが cleanup で消す。消し忘れても48時間で自動削除される）
     return reply(200, { summary: result.summary, scannedTitle: result.scannedTitle })
   } catch (e) { return failure(e) }
 }

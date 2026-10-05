@@ -22,6 +22,14 @@ export class SummaryError extends Error {
   constructor(kind: SummaryFailure, message: string, options?: ErrorOptions) { super(message, options); this.kind = kind }
 }
 const TIMEOUT_MESSAGE = '要約の作成が時間内に終わりませんでした。ページ数が多い場合は時間がかかります。もう一度お試しください。'
+/**
+ * 要約の進み具合（画面に「いまどの段階か・あとどのくらいか」を出すため）
+ *   upload: Drive のファイルを Gemini へ転送 / processing: Gemini がファイルを読める状態にする / summarize: 要約を生成
+ */
+export type SummaryStage = 'upload' | 'processing' | 'summarize'
+/** retry: 目安を過ぎて固まっていたので打ち切ってやり直した・一時的な失敗で待ってから再試行した（その段階での回数） */
+export interface SummaryProgress { stage: SummaryStage; retries: number }
+type Retried = () => void
 const cancelled = () => new SummaryError('cancelled', '要約の作成を中止しました。')
 
 /** 中止されたら途中で終わる待ち時間 */
@@ -74,16 +82,17 @@ type Body = Record<string, unknown>
  * 一時的な失敗なら、少し待って最大2回まで再試行する（利用上限のときは長めに待つ）。
  * ログインが切れていた・ファイルを読めなかったときは、トークンを受け取り直せたら1回だけやり直す
  */
-async function requestWithRetry(body: Body, token: string | null, signal?: AbortSignal) {
-  let result = await unstuck(body, token, signal)
+async function requestWithRetry(body: Body, token: string | null, signal?: AbortSignal, onRetry?: Retried) {
+  let result = await unstuck(body, token, signal, onRetry)
   if ((result.status === 401 || result.data?.code === 'needs_access') && await refreshToken()) {
     token = storedReadToken() ?? storedToken() ?? token
-    result = await unstuck(body, token, signal)
+    result = await unstuck(body, token, signal, onRetry)
   }
   for (const attempt of [0, 1]) {
     if (result.ok || !retryable(result)) break
+    onRetry?.()
     await wait(result.data?.code === 'rate_limited' ? [30_000, 60_000][attempt] : [5_000, 20_000][attempt], signal)
-    result = await unstuck(body, token, signal)
+    result = await unstuck(body, token, signal, onRetry)
   }
   return result
 }
@@ -92,15 +101,16 @@ async function requestWithRetry(body: Body, token: string | null, signal?: Abort
  * 段階ごとの「ふだんならこの時間で終わる」目安。これを大きく過ぎた依頼は、サーバーかGeminiの側で固まっていることが多く、
  * 打ち切ってやり直すとすぐに終わるので、自動で打ち切ってやり直す（最大2回。最後の1回は、サーバーの制限時間いっぱいまで待つ）
  */
-const STALL_LIMIT: Record<string, number> = { upload: 150_000, status: 30_000, summarize: 120_000 }
+export const STALL_LIMIT: Record<string, number> = { upload: 150_000, status: 30_000, summarize: 120_000 }
 const STALL_RETRIES = 2
 
-async function unstuck(body: Body, token: string | null, signal?: AbortSignal) {
+async function unstuck(body: Body, token: string | null, signal?: AbortSignal, onRetry?: Retried) {
   const limit = STALL_LIMIT[String(body.step)]
   if (limit) {
     for (let i = 0; i < STALL_RETRIES; i++) {
       const result = await request(body, token, signal, limit)
       if (result.data?.code !== 'stalled') return result
+      onRetry?.()
     }
   }
   return request(body, token, signal)
@@ -161,8 +171,12 @@ function saveUpload(key: string, name: string | null) {
  * Driveのファイルは読み取り専用の許可（初回だけ）で読むので、ファイルごとの許可は要らない。
  * その許可がもらえず読めなかったときだけ、Pickerでそのファイルを許可してもらってから再試行する
  */
-export async function summarizeScan(scanUrl: string, title: string, author: string, options: { signal?: AbortSignal; onStart?: () => void } = {}): Promise<string> {
-  const { signal, onStart } = options
+export async function summarizeScan(scanUrl: string, title: string, author: string, options: { signal?: AbortSignal; onStart?: () => void; onProgress?: (progress: SummaryProgress) => void } = {}): Promise<string> {
+  const { signal, onStart, onProgress } = options
+  // 段階が変わったとき・やり直したときに知らせる
+  let current: SummaryProgress | undefined
+  const stage = (next: SummaryStage) => { if (current?.stage !== next) { current = { stage: next, retries: 0 }; onProgress?.(current) } }
+  const retried: Retried = () => { if (current) { current = { ...current, retries: current.retries + 1 }; onProgress?.(current) } }
   const fileId = driveFileId(scanUrl) ?? undefined
   const source = fileId ? { fileId } : { url: scanUrl }
   const uploadKey = fileId ?? scanUrl
@@ -181,12 +195,14 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
     let name: string | undefined = loadUploads()[uploadKey]?.name
     let state: string | undefined
     if (name) {
-      const status = await requestWithRetry({ step: 'status', name }, auth, signal)
+      stage('processing')
+      const status = await requestWithRetry({ step: 'status', name }, auth, signal, retried)
       state = status.ok ? status.data?.file?.state : undefined
       if (!state || state === 'FAILED') { saveUpload(uploadKey, null); name = undefined }
     }
     if (!name) {
-      let result = await oneUploadAtATime(() => requestWithRetry({ step: 'upload', ...source }, auth, signal))
+      stage('upload')
+      let result = await oneUploadAtATime(() => requestWithRetry({ step: 'upload', ...source }, auth, signal, retried))
       if (result.status === 401) throw new SummaryError('failed', 'Googleのログインが切れたため、要約を作れませんでした。「Driveに接続」でログインし直してから、もう一度お試しください。')
       // ファイルごとの許可（確認とGoogleの選択画面）は、ボタンを押してすぐのときだけ行う。
       // 順番待ちのあとに確認を出すと、そこで止まって後ろの本が進まなくなるので、失敗として次へ進む
@@ -197,7 +213,7 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
         if (!confirm('全ページスキャンのファイルを読むために、初回のみファイルへのアクセスを許可する必要があります。\nGoogleの選択画面でそのファイルを選んで「選択」を押してください。')) throw new SummaryError('failed', 'ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
         if (!await grantFileAccess(fileId, '全ページスキャン')) throw new SummaryError('failed', 'ファイルへのアクセスが許可されなかったため、要約を作れませんでした。')
         const retryToken = storedToken() ?? await signIn()
-        result = await oneUploadAtATime(() => requestWithRetry({ step: 'upload', ...source }, retryToken, signal))
+        result = await oneUploadAtATime(() => requestWithRetry({ step: 'upload', ...source }, retryToken, signal, retried))
       }
       if (!result.ok || !result.data?.file) throw failed(result)
       name = result.data.file.name
@@ -205,20 +221,22 @@ export async function summarizeScan(scanUrl: string, title: string, author: stri
       saveUpload(uploadKey, name)
     }
 
-    // 2. Gemini が読める状態（ACTIVE）になるまで待つ（最大10分）
+    // 2. Gemini が読める状態（ACTIVE）になるまで待つ（最大10分。読める状態になったらすぐ次へ進めるよう、こまめに確かめる）
     const readyBy = Date.now() + 10 * 60_000
+    if (state === 'PROCESSING') stage('processing')
     while (state === 'PROCESSING') {
       if (Date.now() > readyBy) throw new SummaryError('timeout', 'スキャンのファイルの準備が時間内に終わりませんでした。しばらくしてから、もう一度お試しください（アップロードはやり直さずに続きから行います）。')
-      await wait(5_000, signal)
-      const status = await requestWithRetry({ step: 'status', name }, auth, signal)
+      await wait(2_000, signal)
+      const status = await requestWithRetry({ step: 'status', name }, auth, signal, retried)
       if (!status.ok) throw failed(status)
       state = status.data?.file?.state
     }
     if (state === 'FAILED') { saveUpload(uploadKey, null); throw new SummaryError('failed', 'このファイルは要約に使えませんでした（形式が対応していないなど）。') }
 
     // 3. 要約を作る（時間切れなら、アップロードしたファイルのまま1回だけやり直す）
-    let result = await requestWithRetry({ step: 'summarize', name, title, author }, storedReadToken() ?? storedToken() ?? auth, signal)
-    if (result.data?.code === 'timeout') result = await requestWithRetry({ step: 'summarize', name, title, author }, storedReadToken() ?? storedToken() ?? auth, signal)
+    stage('summarize')
+    let result = await requestWithRetry({ step: 'summarize', name, title, author }, storedReadToken() ?? storedToken() ?? auth, signal, retried)
+    if (result.data?.code === 'timeout') { retried(); result = await requestWithRetry({ step: 'summarize', name, title, author }, storedReadToken() ?? storedToken() ?? auth, signal, retried) }
     // ファイルが消えていた・別の本だった（サーバーが削除済み）ときは、次はアップロードからやり直す
     if (result.data?.code === 'file_gone' || result.data?.code === 'mismatch') saveUpload(uploadKey, null)
     if (!result.ok || !result.data?.summary) throw failed(result)

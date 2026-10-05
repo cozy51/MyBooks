@@ -253,6 +253,10 @@ function App() {
   const filteredIds = useMemo(() => new Set(filtered.map(b => b.id)), [filtered])
   const paged = view !== 'map' && pageCount > 1
   const goPage = (next: number) => { setPaging({ key: filterKey, page: next }); headingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
+  // 詳細画面で前後の本へ移る（表示中の絞り込み・並び順のとおり。別のページの本へ移ったら、一覧もそのページにする）
+  const editIndex = editing ? filtered.findIndex(b => b.id === editing.id) : -1
+  const bookNav = editIndex >= 0 ? { prev: filtered[editIndex - 1], next: filtered[editIndex + 1], index: editIndex, total: filtered.length } : undefined
+  const stepBook = (b: Book) => { const i = filtered.findIndex(x => x.id === b.id); if (i >= 0 && view !== 'map') setPaging({ key: filterKey, page: Math.floor(i / PAGE_SIZE) + 1 }) }
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), books }, null, 2)], { type: 'application/json' })
@@ -309,7 +313,7 @@ function App() {
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {notices.length > 0 && <div className="notices" role="status">{notices.map(n => <p key={n.id} className={n.error ? 'error' : undefined}>{n.error ? <CloudAlert /> : <Check />}{n.text}<button type="button" aria-label="閉じる" onClick={() => setNotices(list => list.filter(x => x.id !== n.id))}><X /></button></p>)}</div>}
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
-    {editing && <BookModal key={editing.id} book={editing} books={books} summaryJob={summaryJobs.get(editing.id)} summaryIssue={summaryIssues[editing.id]} onCancelSummary={() => cancelSummary(editing.id)} onSummarize={startSummary} onSummaryApplied={() => dropJob(editing.id)} tab={modalTab} onTab={setModalTab} onOpen={openBook} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const prev = books.find(b => b.id === book.id); if (summaryIssues[book.id]?.kind === 'mismatch' && (scanLink(prev?.links ?? []) !== scanLink(book.links) || prev?.title !== book.title)) setIssue(book.id, null); const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); if (open) openBook(open); else setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
+    {editing && <BookModal key={editing.id} book={editing} books={books} summaryJob={summaryJobs.get(editing.id)} summaryIssue={summaryIssues[editing.id]} onCancelSummary={() => cancelSummary(editing.id)} onSummarize={startSummary} onSummaryApplied={() => dropJob(editing.id)} tab={modalTab} onTab={setModalTab} onOpen={openBook} nav={bookNav} onStep={stepBook} keysBlocked={Boolean(zoomed)} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const prev = books.find(b => b.id === book.id); if (summaryIssues[book.id]?.kind === 'mismatch' && (scanLink(prev?.links ?? []) !== scanLink(book.links) || prev?.title !== book.title)) setIssue(book.id, null); const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); if (open) openBook(open); else setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>
@@ -356,7 +360,7 @@ function ScoreBadge({ score }: { score: SearchScore }) {
 
 function BookCard({ no, book, score, summary, issue, onCancelSummary, onAutofill, onClick, onZoom }: { no: number; book: Book; score?: SearchScore; summary?: SummaryJob; issue?: SummaryIssue; onCancelSummary: (id: string) => void; onAutofill: (b: Book) => void; onClick: () => void; onZoom: (z: Zoom) => void }) { const { child, parent } = categoryPath(book.categoryId); return <article className="book-card" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
   <div className="cover-wrap"><CoverImage src={book.cover} alt={`${book.title}の表紙`} onZoom={onZoom} fallback={<div className="cover-placeholder"><BookOpen /><span>NO COVER</span></div>} /></div>
-  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><AuthorName author={book.author} /><span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left">{score && <ScoreBadge score={score} />}<span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{summary && summary.status !== 'done' ? <SummaryBusy job={summary} onCancel={() => onCancelSummary(book.id)} /> : <>{book.memo.trim() && <CopySummaryButton text={book.memo} />}{issue && (issue.kind === 'mismatch' || !book.memo.trim()) && <SummaryIssueBadge issue={issue} />}{scanLink(book.links) && <button type="button" className="card-autofill" onClick={e => { e.stopPropagation(); onAutofill(book) }} onKeyDown={e => e.stopPropagation()} title="表紙から入力＋要約（表紙からタイトル・著者・分類を入力し、続けて全ページスキャンから要約を作ります）" aria-label="表紙から入力＋要約"><Sparkles /></button>}</>}{book.baseMonth && <span>{book.baseMonth.replace('-', '年')}月</span>}</span></div><CardLinks links={book.links} /></div>
+  <div className="card-body"><div className="category-line">{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div><h3>{book.title}</h3><div className="author-line"><AuthorName author={book.author} /><span className="book-no">No.{no}</span></div><div className="card-meta"><span className="meta-left">{score && <ScoreBadge score={score} />}<span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>{summary && summary.status !== 'done' ? <SummaryBusy job={summary} onCancel={() => onCancelSummary(book.id)} /> : <>{book.memo.trim() && <CopySummaryButton text={book.memo} />}{issue && (issue.kind === 'mismatch' || !book.memo.trim()) && <SummaryIssueBadge issue={issue} />}{scanLink(book.links) && <button type="button" className="card-autofill" onClick={e => { e.stopPropagation(); onAutofill(book) }} onKeyDown={e => e.stopPropagation()} title="表紙から入力＋要約（表紙からタイトル・著者・分類を入力し、続けて全ページスキャンから要約を作ります）" aria-label="表紙から入力＋要約"><Sparkles /></button>}</>}{book.baseMonth && <span className="card-month">{book.baseMonth}</span>}</span></div><CardLinks links={book.links} /></div>
 </article> }
 
 /** 著者名。登録済みは人物アイコン付きで濃く、未登録は薄い点線のラベルにして区別しやすくする */
@@ -464,7 +468,10 @@ const FILL_LABEL = { title: 'タイトル', author: '著者', categoryId: '分�
 const categoryLabel = (id: string) => categories.find(c => c.id === id)?.name ?? id
 
 /** onSave の open: 保存したあとに続けて開く本（類似する本・同じ著者の本から選んだとき） */
-function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onSummarize, onSummaryApplied, tab, onTab, onOpen, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; books: Book[]; summaryJob?: SummaryJob; summaryIssue?: SummaryIssue; onCancelSummary: () => void; onSummarize: (b: Book, scanUrl: string) => void; onSummaryApplied: () => void; tab: ModalTab; onTab: (t: ModalTab) => void; onOpen: (b: Book) => void; monthOptions: string[]; onClose: () => void; onSave: (b: Book, open?: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
+/** 詳細画面の前後の本（表示中の一覧での位置） */
+type BookNav = { prev?: Book; next?: Book; index: number; total: number }
+
+function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onSummarize, onSummaryApplied, tab, onTab, onOpen, nav, onStep, keysBlocked, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; books: Book[]; summaryJob?: SummaryJob; summaryIssue?: SummaryIssue; onCancelSummary: () => void; onSummarize: (b: Book, scanUrl: string) => void; onSummaryApplied: () => void; tab: ModalTab; onTab: (t: ModalTab) => void; onOpen: (b: Book) => void; nav?: BookNav; onStep: (b: Book) => void; keysBlocked: boolean; monthOptions: string[]; onClose: () => void; onSave: (b: Book, open?: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
   const isNew = !book.title
   const [draft, setDraft] = useState<Book>({ ...book, links: withPresetRows(book.links) })
   // 表紙・スキャンから自動で入力した項目と、入力前の値（変更あり／なしの表示用。手で直すと目印を外す）
@@ -607,7 +614,30 @@ function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onS
     else onSave(finalize(current), open)
   }
   const openRelated = (b: Book) => void saveAndClose(b)
+  // 前後の本へ移る（今の本の変更は保存してから。表示中のタブはそのまま）
+  const step = async (b?: Book) => {
+    if (!b) return
+    const current = tab
+    await saveAndClose(b)
+    if (!closingRef.current) return
+    onStep(b); onTab(current)
+  }
+  // ←→キーでも前後の本へ移る（入力欄で文字を打っているときや、表紙を拡大しているときは除く）
+  useEffect(() => {
+    if (!nav || keysBlocked) return
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.defaultPrevented) return
+      const el = e.target as HTMLElement | null
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return
+      const target = e.key === 'ArrowLeft' ? nav.prev : nav.next
+      if (!target) return
+      e.preventDefault(); void step(target)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) void saveAndClose() }}><section className="modal" onPaste={onPaste}><div className="modal-head"><div><p className="eyebrow">{isNew ? 'NEW BOOK' : 'BOOK DETAILS'}</p><h2>{isNew ? '本を追加' : '本の詳細・編集'}</h2></div>
+    {nav && <div className="modal-nav"><button type="button" onClick={() => void step(nav.prev)} disabled={!nav.prev} title={nav.prev ? `前の本（←）：${nav.prev.title}` : '最初の本です'} aria-label="前の本"><ChevronLeft /></button><span>{nav.index + 1} / {nav.total}</span><button type="button" onClick={() => void step(nav.next)} disabled={!nav.next} title={nav.next ? `次の本（→）：${nav.next.title}` : '最後の本です'} aria-label="次の本"><ChevronRight /></button></div>}
     <div className="modal-tabs" role="tablist">{([['edit', <><BookOpen /> 詳細・編集</>], ['similar', <><Sparkles /> 類似する本</>], ['author', <><UserRound /> 同じ著者の本</>]] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => onTab(id)}>{label}</button>)}</div>
     <button className="icon-btn" onClick={() => void saveAndClose()} title="保存して閉じる"><X /></button></div>{tab === 'similar' && <div className="related-panel"><SimilarBooks book={book} books={books} onOpen={openRelated} /></div>}
     {tab === 'author' && <div className="related-panel"><SameAuthorBooks book={{ ...book, author: draft.author }} books={books} onOpen={openRelated} /></div>}

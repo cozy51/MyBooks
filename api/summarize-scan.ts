@@ -2,7 +2,7 @@
 // 1. Drive からファイルを取得（ログイン中のユーザーの権限。だめなら「リンクを知っている全員」の公開リンク）
 // 2. Gemini の File API にそのまま流し込んでアップロード（大きなPDFでもメモリに溜めない）
 // 3. アップロードしたファイルを読ませて要約を作り、終わったらファイルを削除する
-//   SUMMARY_MODEL … モデル名を変えるときだけ設定（既定: gemini-flash-latest）
+//   SUMMARY_MODEL … モデル名を変えるときだけ設定（既定: gemini-flash-lite-latest。料金を抑えるため軽量版を使う。質を上げたいときは gemini-flash-latest）
 //   SUMMARY_MEDIA_RESOLUTION … PDFを読む解像度（low / medium / high / default。既定: low で速さ優先）
 // リクエスト: { fileId?: DriveのファイルID, url?: 公開されたPDFのURL, title, author }（1〜3をまとめて行う）
 // 大きなPDFでも時間切れになりにくいよう、段階ごとに分けて呼ぶこともできる（それぞれに約280秒の制限時間がある）
@@ -135,7 +135,8 @@ function mediaResolution(): string | undefined {
 }
 
 async function summarize(deadline: number, p: Provider, file: { uri: string; mimeType: string }, title: string, author: string): Promise<SummaryResult> {
-  for (const model of geminiModels(process.env.SUMMARY_MODEL)) {
+  // 全ページを読ませるので入力が大きく、料金のほとんどを占める。単価の安い軽量版（Flash-Lite）を先に使う
+  for (const model of geminiModels(process.env.SUMMARY_MODEL?.trim() || 'gemini-flash-lite-latest')) {
     // 未対応の設定で断られたら、その設定を外して同じモデルでやり直す
     let thinking = true
     let resolution = mediaResolution()

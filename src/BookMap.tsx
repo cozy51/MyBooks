@@ -60,7 +60,7 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
     <div className="map-foot">
       {busy ? <span className="map-progress"><LoaderCircle className="spin" />{progressLabel(progress)}{progress.total ? <progress value={progress.done} max={progress.total} /> : null}</span>
         : <span>{activeCount === points.length ? `${points.length}冊を配置` : `${points.length}冊中 ${activeCount}冊が条件に一致`}{untitled > 0 && `・タイトルのない${untitled}冊は対象外`}{pending > 0 && `・未計算 ${pending}冊`}</span>}
-      <span className="map-note">位置はタイトルと要約の内容の近さ、色は分類を表します。軸は厳密な意味を持ちませんが、横方向は『人・社会・一般 ↔ 技術・専門』、縦方向は『言語・情報・概念 ↔ モノ・工学・実体』の傾向として見ることができます。</span>
+      <span className="map-note">位置はタイトルと要約の内容の近さ、色は分類を表します。軸は厳密な意味を持ちませんが、横方向は『社会 ↔ 技術』、縦方向は『抽象 ↔ 具体』の傾向として見ることができます。</span>
     </div>
     {error && <div className="map-error" role="alert"><p>{error.message}</p>{error.code === 'unauthorized' && driveStatus !== 'unavailable' && <button className="primary-btn" onClick={onConnect}><Cloud /> Googleでログインして接続</button>}</div>}
     {!error && driveError && <p className="map-drive-note">マップのデータをGoogle Driveに保存できませんでした（このブラウザには保存済み）：{driveError}</p>}
@@ -269,10 +269,10 @@ function MapCanvas({ points, onSelect }: { points: Point[]; onSelect: (book: Boo
  */
 function MapAxes() {
   return <div className="map-axes" aria-hidden="true">
-    <span className="left">← 人・社会・一般</span>
-    <span className="right">技術・専門 →</span>
-    <span className="top">↑ モノ・工学・実体</span>
-    <span className="bottom">↓ 言語・情報・概念</span>
+    <span className="left">← 社会</span>
+    <span className="right">技術 →</span>
+    <span className="top">↑ 具体</span>
+    <span className="bottom">↓ 抽象</span>
   </div>
 }
 

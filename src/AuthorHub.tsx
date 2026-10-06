@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { BookMarked, BookOpen, CircleAlert, ExternalLink, Film, Globe, Info, Link2, LoaderCircle, RefreshCw, Search, Sparkles, Star, UserRound, X } from 'lucide-react'
+import { BookMarked, Fingerprint, BookOpen, CircleAlert, ExternalLink, Film, Globe, Info, Link2, LoaderCircle, RefreshCw, Search, Sparkles, Star, UserRound, X } from 'lucide-react'
 import { RelatedRow } from './RelatedBooks'
-import { booksByAuthor, fetchAuthorProfile, findOwned, loadCachedProfile, type AuthorProfile, type ProfileField, type ProfileSource, type Video } from './authorProfile'
+import { booksByAuthor, fetchAuthorProfile, findOwned, loadCachedProfile, loadHint, saveHint, type AuthorProfile, type ProfileField, type ProfileSource, type Video } from './authorProfile'
 import type { Book } from './types'
 
 type HubTab = 'overview' | 'books' | 'picks' | 'videos' | 'info'
@@ -50,6 +50,7 @@ export function AuthorHub({ name, books, currentId, onOpen, onClose }: { name: s
       <div className="modal-tabs author-hub-tabs" role="tablist">{TABS.map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}{id === 'books' && <small>{own.length}</small>}</button>)}</div>
       <div className="author-hub-body">
         {tab !== 'books' && <FetchStatus profile={profile} loading={loading} error={error} onRefresh={() => void refresh()} />}
+        {tab !== 'books' && !loading && <HintBox name={name} profile={profile} onApply={() => void refresh()} />}
         {tab === 'overview' && profile && <Overview profile={profile} sources={sources} onSource={() => setTab('info')} />}
         {tab === 'books' && <OwnBooks name={name} own={own} currentId={currentId} onOpen={onOpen} />}
         {tab === 'picks' && profile && <Picks profile={profile} name={name} books={books} sources={sources} onOpen={onOpen} />}
@@ -139,7 +140,9 @@ function Picks({ profile, name, books, sources, onOpen }: { profile: AuthorProfi
 const youtubeSearch = (q: string) => `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`
 
 function Videos({ profile, name }: { profile: AuthorProfile | null; name: string }) {
-  const searches = <div className="hub-video-search"><span>YouTubeで探す：</span>{['講演', 'インタビュー', '対談'].map(k => <a key={k} href={youtubeSearch(`${name} ${k}`)} target="_blank" rel="noreferrer"><Film /> {k}</a>)}</div>
+  // 名前だけだと同姓同名の別人の動画が出やすいので、著書の分野・手がかりも付けて検索する
+  const topic = profile?.topics?.[0] ?? ''
+  const searches = <div className="hub-video-search"><span>YouTubeで探す：</span>{['講演', 'インタビュー', '対談'].map(k => <a key={k} href={youtubeSearch(`${name} ${topic} ${k}`.replace(/\s+/g, ' '))} target="_blank" rel="noreferrer"><Film /> {k}</a>)}</div>
   const videos = profile?.videos
   if (!videos) return <>
     <p className="related-empty">{profile ? 'YouTubeの動画を一覧表示するには、サーバーの環境変数 YOUTUBE_API_KEY（YouTube Data API v3 のAPIキー）を設定してください。' : '動画の情報を取得できませんでした。'}下のリンクからYouTubeで検索できます。</p>
@@ -147,14 +150,14 @@ function Videos({ profile, name }: { profile: AuthorProfile | null; name: string
   </>
   return <>
     {videos.length ? <>
-      <p className="related-lead"><Film /> YouTubeで「{name}」の講演・インタビュー・対談を探した結果です（講演・インタビュー・対談を優先して表示）。同姓同名の別の人物の動画が含まれることがあります。</p>
+      <p className="related-lead"><Film /><span>YouTubeで「{name}」の動画を探し、MyBooksの著書や分野（{profile?.topics?.join('・') || '著書の内容'}）と照らして本人のものと判断した動画だけを表示しています（講演・インタビュー・対談を優先）。</span></p>
       <ul className="hub-videos">{videos.map(v => <li key={v.id}><a href={v.url} target="_blank" rel="noreferrer">
         <span className="hub-thumb"><img src={v.thumbnail} alt="" loading="lazy" referrerPolicy="no-referrer" /><span className={`hub-video-kind ${v.kind}`}>{VIDEO_KIND[v.kind]}</span></span>
         <strong>{v.title}</strong>
         <small>{v.channel}{v.publishedAt && ` ・ ${v.publishedAt.slice(0, 10)}`}</small>
       </a></li>)}</ul>
       <p className="hub-note">情報源：YouTube（YouTube Data API の検索結果）</p>
-    </> : <p className="related-empty">「{name}」の名前が含まれる講演・インタビュー・対談の動画が見つかりませんでした。</p>}
+    </> : <p className="related-empty">著書の著者本人のものと確かめられる動画が見つかりませんでした（同姓同名の別の人物の動画は表示しません）。別の人物の情報が出る場合は、上の「人物を見分ける手がかり」に所属や分野を入れて更新してください。</p>}
     {searches}
   </>
 }
@@ -178,4 +181,18 @@ function RelatedInfo({ profile, name, onOpen }: { profile: AuthorProfile; name: 
     </section>
     <section className="hub-section"><h4><Search /> ほかのサイトで調べる</h4><div className="hub-search-links">{searches.map(([label, url]) => <a key={label} href={url} target="_blank" rel="noreferrer"><ExternalLink /> {label}</a>)}</div></section>
   </div>
+}
+
+/** 人物を見分ける手がかり。同姓同名の別人の情報が出るときに、所属・分野などを入れて検索し直す */
+function HintBox({ name, profile, onApply }: { name: string; profile: AuthorProfile | null; onApply: () => void }) {
+  const [hint, setHint] = useState(() => loadHint(name))
+  const [open, setOpen] = useState(() => Boolean(loadHint(name)) || (profile !== null && profile.found !== 'yes'))
+  const apply = (e: React.FormEvent) => { e.preventDefault(); saveHint(name, hint); onApply() }
+  if (!open) return <button type="button" className="hub-hint-toggle" onClick={() => setOpen(true)}><Fingerprint /> 別の人物の情報が出るときは、手がかりを入れて検索し直せます</button>
+  return <form className="hub-hint" onSubmit={apply}>
+    <label htmlFor="hub-hint"><Fingerprint /> 人物を見分ける手がかり</label>
+    <p>同姓同名の別の人物の情報が出るときは、所属・肩書き・分野などを入れてください（例：技術士 機械設計、〇〇大学 教授）。MyBooksの著書名・分野と合わせて検索し、本人かどうかの判断に使います。</p>
+    <div><input id="hub-hint" value={hint} maxLength={100} onChange={e => setHint(e.target.value)} placeholder="所属・肩書き・分野など" /><button className="primary-btn"><RefreshCw /> この手がかりで検索し直す</button></div>
+    {profile?.topics && profile.topics.length > 0 && <small>前回の検索で使った手がかり：{profile.topics.join('・')}</small>}
+  </form>
 }

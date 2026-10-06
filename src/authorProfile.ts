@@ -31,10 +31,14 @@ export interface AuthorProfile {
   videos: Video[] | null
   sources: ProfileSource[]
   queries: string[]
+  /** 検索と、同じ人物かの判断に使った著書の分野・手がかり */
+  topics?: string[]
+  hint?: string
   fetchedAt: string
 }
 
-const CACHE_VERSION = 1
+// 2: 名前だけで検索して同姓同名の別人の情報が混ざることがあったため、以前に保存した内容は使わない
+const CACHE_VERSION = 2
 const cacheKey = (name: string) => `author-profile-v${CACHE_VERSION}:${authorKeys(name)[0] ?? name}`
 
 /** この著者の本（MyBooksに登録されているもの。著者欄のどれかが同じ） */
@@ -46,7 +50,12 @@ export function booksByAuthor(name: string, books: Book[]): Book[] {
 
 export const loadCachedProfile = (name: string) => loadLocal<AuthorProfile>(cacheKey(name))
 
-export async function fetchAuthorProfile(name: string, books: Book[]): Promise<AuthorProfile> {
+// 人物を見分ける手がかり（所属・分野など。利用者が入力したもの）は、著者ごとにこのブラウザに覚える
+const hintKey = (name: string) => `mybooks-author-hint:${authorKeys(name)[0] ?? name}`
+export function loadHint(name: string): string { try { return localStorage.getItem(hintKey(name)) ?? '' } catch { return '' } }
+export function saveHint(name: string, hint: string) { try { if (hint.trim()) localStorage.setItem(hintKey(name), hint.trim()); else localStorage.removeItem(hintKey(name)) } catch { /* noop */ } }
+
+export async function fetchAuthorProfile(name: string, books: Book[], hint = loadHint(name)): Promise<AuthorProfile> {
   // サーバーはログイン中のユーザーからの依頼だけ受け付けるので、ログインしていなければ先にログインしてもらう
   const token = storedToken() ?? storedReadToken() ?? (DRIVE_CLIENT_ID ? await signIn() : null)
   const own = booksByAuthor(name, books).slice(0, 30)
@@ -56,7 +65,7 @@ export async function fetchAuthorProfile(name: string, books: Book[]): Promise<A
     res = await fetch('/api/author-profile', {
       signal: AbortSignal.timeout(65_000), method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ name, books: own.map(b => ({ id: b.id, title: b.title.trim(), category: categoryName(b.categoryId), summary: b.memo.trim() })) }),
+      body: JSON.stringify({ name, hint: hint.trim(), books: own.map(b => ({ id: b.id, title: b.title.trim(), category: categoryName(b.categoryId), summary: b.memo.trim() })) }),
     })
   } catch (e) {
     if (e instanceof Error && e.name === 'TimeoutError') throw new Error('著者の情報の検索が時間内に終わりませんでした。もう一度お試しください。', { cause: e })

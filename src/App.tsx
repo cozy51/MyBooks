@@ -7,6 +7,8 @@ import { DATA_FOLDER_URL, DRIVE_API_KEY, DRIVE_CLIENT_ID, DRIVE_FILE_NAME, pickI
 import { useDriveSync, type SyncStatus } from './useDriveSync'
 import { CardLinks, LinkEditor } from './LinkEditor'
 import { SameAuthorBooks, SimilarBooks } from './RelatedBooks'
+import { AuthorHub } from './AuthorHub'
+import { authorNames } from './authors'
 import { readCoverInfo, type CoverInfo } from './coverInfo'
 import { cleanLinks, isScan, isUrl, newLink, withPresetRows } from './links'
 import { readToken, STALL_LIMIT, SummaryError, summarizeScan, type SummaryFailure, type SummaryProgress, type SummaryStage } from './scanSummary'
@@ -618,6 +620,9 @@ function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onS
     else onSave(finalize(current), open)
   }
   const openRelated = (b: Book) => void saveAndClose(b)
+  // 著者プロフィール（著者ハブ）で開いている著者
+  const [hubAuthor, setHubAuthor] = useState<string | null>(null)
+  const authors = authorNames(draft.author)
   // 前後の本へ移る（今の本の変更は保存してから。表示中のタブはそのまま）
   const step = async (b?: Book) => {
     if (!b) return
@@ -628,7 +633,7 @@ function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onS
   }
   // ←→キーでも前後の本へ移る（入力欄で文字を打っているときや、表紙を拡大しているときは除く）
   useEffect(() => {
-    if (!nav || keysBlocked) return
+    if (!nav || keysBlocked || hubAuthor) return
     const onKey = (e: KeyboardEvent) => {
       if ((e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.defaultPrevented) return
       const el = e.target as HTMLElement | null
@@ -643,7 +648,10 @@ function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onS
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) void saveAndClose() }}><section className="modal" onPaste={onPaste}><div className="modal-head"><div><p className="eyebrow">{isNew ? 'NEW BOOK' : 'BOOK DETAILS'}</p><h2>{isNew ? '本を追加' : '本の詳細・編集'}</h2></div>
     {nav && <div className="modal-nav"><button type="button" onClick={() => void step(nav.prev)} disabled={!nav.prev} title={nav.prev ? `前の本（←）：${nav.prev.title}` : '最初の本です'} aria-label="前の本"><ChevronLeft /></button><span>{nav.index + 1} / {nav.total}</span><button type="button" onClick={() => void step(nav.next)} disabled={!nav.next} title={nav.next ? `次の本（→）：${nav.next.title}` : '最後の本です'} aria-label="次の本"><ChevronRight /></button></div>}
     <div className="modal-tabs" role="tablist">{([['edit', <><BookOpen /> 詳細・編集</>], ['similar', <><Sparkles /> 類似する本</>], ['author', <><UserRound /> 同じ著者の本</>]] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => onTab(id)}>{label}</button>)}</div>
-    <button className="icon-btn" onClick={() => void saveAndClose()} title="保存して閉じる"><X /></button></div>{tab === 'similar' && <div className="related-panel"><SimilarBooks book={book} books={books} onOpen={openRelated} /></div>}
+    <button className="icon-btn" onClick={() => void saveAndClose()} title="保存して閉じる"><X /></button></div>
+    {authors.length > 0 && <div className="author-hub-bar"><span className="author-hub-bar-label"><UserRound /> 著者</span>{authors.map(name => <button key={name} type="button" className="author-hub-btn" onClick={() => setHubAuthor(name)} title={`${name} の著者プロフィール（概要・著書・おすすめ・動画・関連情報）を開きます`}><strong>{name}</strong><span>著者プロフィール</span><ChevronRight /></button>)}</div>}
+    {hubAuthor && <AuthorHub name={hubAuthor} books={books} currentId={book.id} onOpen={b => { setHubAuthor(null); openRelated(b) }} onClose={() => setHubAuthor(null)} />}
+    {tab === 'similar' && <div className="related-panel"><SimilarBooks book={book} books={books} onOpen={openRelated} /></div>}
     {tab === 'author' && <div className="related-panel"><SameAuthorBooks book={{ ...book, author: draft.author }} books={books} onOpen={openRelated} /></div>}
     <form onSubmit={submit} hidden={tab !== 'edit'}>
     <div className="form-layout"><div className="cover-editor"><CoverImage src={draft.cover} alt={`${draft.title || '表紙'}のプレビュー`} onZoom={onZoom} fallback={canPasteCover

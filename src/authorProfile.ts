@@ -19,6 +19,8 @@ export interface AuthorProfile {
   identityNote: string
   photo: { url: string; source: number } | null
   birthDate: ProfileField | null
+  /** 没年月日（亡くなっている場合だけ。以前に保存したプロフィールには無い） */
+  deathDate?: ProfileField | null
   birthPlace: ProfileField | null
   occupation: ProfileField | null
   specialty: ProfileField | null
@@ -88,3 +90,4 @@ export function findOwned(title: string, name: string, books: Book[]): Book | un
   const match = (b: Book) => { const k = titleKey(b.title); return k === key || (Math.min(k.length, key.length) >= 4 && (k.includes(key) || key.includes(k))) }
   return booksByAuthor(name, books).find(match) ?? books.find(b => titleKey(b.title) === key)
 }
+

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BookMarked, Fingerprint, BookOpen, CircleAlert, ExternalLink, Film, Globe, Info, Link2, LoaderCircle, RefreshCw, Search, Sparkles, Star, UserRound, X } from 'lucide-react'
 import { RelatedRow } from './RelatedBooks'
+import { ageText } from './authors'
 import { booksByAuthor, fetchAuthorProfile, findOwned, loadCachedProfile, loadHint, saveHint, type AuthorProfile, type ProfileField, type ProfileSource, type Video } from './authorProfile'
 import type { Book } from './types'
 
@@ -85,7 +86,9 @@ function Cites({ field, sources, onSource }: { field: { sources: number[]; unver
 }
 
 function Overview({ profile, sources, onSource }: { profile: AuthorProfile; sources: ProfileSource[]; onSource: () => void }) {
-  const facts: [string, ProfileField | null][] = [['生年月日', profile.birthDate], ['出身地', profile.birthPlace], ['職業', profile.occupation], ['専門分野', profile.specialty]]
+  const facts: [string, ProfileField | null][] = [['生年月日', profile.birthDate], ...(profile.deathDate ? [['没年月日', profile.deathDate] as [string, ProfileField]] : []), ['出身地', profile.birthPlace], ['職業', profile.occupation], ['専門分野', profile.specialty]]
+  // 生年月日から今日時点の年齢を計算する（亡くなっている場合は享年。年だけ分かるときは「78〜79歳」のように幅を持たせる）
+  const age = profile.birthDate ? ageText(profile.birthDate.value, profile.deathDate?.value) : null
   const photoSource = profile.photo ? sources[profile.photo.source] : undefined
   const empty = !facts.some(([, f]) => f) && !profile.career && !profile.intro && !profile.perspectives.length
   return <div className="hub-overview">
@@ -99,7 +102,7 @@ function Overview({ profile, sources, onSource }: { profile: AuthorProfile; sour
     </div>
     {profile.found !== 'yes' && <p className="hub-warn"><CircleAlert /> {profile.found === 'no' ? 'この著者についての公開情報は見つかりませんでした。' : '同姓同名の別の人物の情報が含まれている可能性があります。'}{profile.identityNote && ` ${profile.identityNote}`}</p>}
     {empty ? <p className="hub-empty">情報源で確かめられたプロフィールがありません。AIの推測ではプロフィールを作らないため、表示できる項目がありません。</p> : <>
-      <dl className="hub-facts">{facts.map(([label, f]) => <div key={label}><dt>{label}</dt><dd>{f ? <>{f.value}<Cites field={f} sources={sources} onSource={onSource} /></> : <span className="hub-none">情報源なし</span>}</dd></div>)}</dl>
+      <dl className="hub-facts">{facts.map(([label, f]) => <div key={label}><dt>{label}</dt><dd>{f ? <>{f.value}{label === '生年月日' && age && <span className={`hub-age${age.deceased ? ' deceased' : ''}`} title={age.deceased ? '没年月日までの年齢（享年）' : '生年月日から今日時点で計算した年齢'}>{age.deceased ? `享年${age.text}` : `現在${age.text}`}</span>}<Cites field={f} sources={sources} onSource={onSource} /></> : <span className="hub-none">情報源なし</span>}</dd></div>)}</dl>
       {profile.career && <section className="hub-section"><h4>経歴</h4><p>{profile.career.value}<Cites field={profile.career} sources={sources} onSource={onSource} /></p></section>}
       {profile.intro && <section className="hub-section"><h4>人物紹介</h4><p>{profile.intro.value}<Cites field={profile.intro} sources={sources} onSource={onSource} /></p></section>}
       {profile.perspectives.length > 0 && <section className="hub-section"><h4>著書・発言から見える人物像・考え方</h4>

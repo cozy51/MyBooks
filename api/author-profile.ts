@@ -26,7 +26,7 @@ interface Candidate { id: string; title: string; category: string; summary: stri
 // ---- Wikipedia / Wikidata ----
 
 interface WikiPage { title: string; url: string; extract: string; thumbnail?: string; wikidata?: string }
-interface WikiFacts { birthDate?: string; birthPlace?: string; occupation?: string; fields?: string; works: string[]; wikidataUrl: string }
+interface WikiFacts { birthDate?: string; deathDate?: string; birthPlace?: string; occupation?: string; fields?: string; works: string[]; wikidataUrl: string }
 
 const compact = (s: string) => s.normalize('NFKC').replace(/[\s\u3000]+/g, '')
 
@@ -72,11 +72,15 @@ async function wikidataFacts(deadline: number, id: string): Promise<WikiFacts | 
   const labels = all.length ? (await get({ ids: all.join('|'), props: 'labels', languages: 'ja|en' })).entities ?? {} : {}
   const label = (q: string) => labels[q]?.labels?.ja?.value ?? labels[q]?.labels?.en?.value
   const names = (qs: string[]) => qs.map(label).filter((v): v is string => Boolean(v))
-  const time = (claims.P569?.[0]?.mainsnak?.datavalue?.value as { time?: string; precision?: number } | undefined)
-  let birthDate: string | undefined
-  const m = time?.time?.match(/^\+?(\d{1,4})-(\d{2})-(\d{2})/)
-  if (m) birthDate = (time!.precision ?? 11) >= 11 ? `${Number(m[1])}年${Number(m[2])}月${Number(m[3])}日` : (time!.precision ?? 11) === 10 ? `${Number(m[1])}年${Number(m[2])}月` : `${Number(m[1])}年`
-  return { birthDate, birthPlace: names(wanted.place)[0], occupation: names(wanted.occupation).join('、') || undefined, fields: names(wanted.fields).join('、') || undefined, works: names(wanted.works), wikidataUrl: `https://www.wikidata.org/wiki/${id}` }
+  // 日付（精度が日・月・年のどれかに合わせて「1947年7月14日」「1947年7月」「1947年」にする）
+  const date = (p: string) => {
+    const time = claims[p]?.[0]?.mainsnak?.datavalue?.value as { time?: string; precision?: number } | undefined
+    const m = time?.time?.match(/^\+?(\d{1,4})-(\d{2})-(\d{2})/)
+    if (!m) return undefined
+    const precision = time!.precision ?? 11
+    return precision >= 11 ? `${Number(m[1])}年${Number(m[2])}月${Number(m[3])}日` : precision === 10 ? `${Number(m[1])}年${Number(m[2])}月` : `${Number(m[1])}年`
+  }
+  return { birthDate: date('P569'), deathDate: date('P570'), birthPlace: names(wanted.place)[0], occupation: names(wanted.occupation).join('、') || undefined, fields: names(wanted.fields).join('、') || undefined, works: names(wanted.works), wikidataUrl: `https://www.wikidata.org/wiki/${id}` }
 }
 
 // ---- AI（Web検索つき） ----
@@ -88,13 +92,13 @@ const SCHEMA = {
     found: { type: 'STRING', enum: ['yes', 'unsure', 'no'], description: 'MyBooksの著書の著者についての公開情報が見つかったか' },
     identityNote: { type: 'STRING' },
     wikipediaIsSamePerson: { type: 'BOOLEAN' },
-    birthDate: FIELD, birthPlace: FIELD, occupation: FIELD, career: FIELD, specialty: FIELD, intro: FIELD,
+    birthDate: FIELD, deathDate: FIELD, birthPlace: FIELD, occupation: FIELD, career: FIELD, specialty: FIELD, intro: FIELD,
     perspectives: { type: 'ARRAY', items: FIELD },
     recommendations: { type: 'ARRAY', items: { type: 'OBJECT', properties: { title: { type: 'STRING' }, note: { type: 'STRING' }, refs: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['title', 'note', 'refs'] } },
     links: { type: 'ARRAY', items: { type: 'OBJECT', properties: { label: { type: 'STRING' }, url: { type: 'STRING' } }, required: ['label', 'url'] } },
     videoIds: { type: 'ARRAY', items: { type: 'STRING' }, description: 'MyBooksの著書の著者と同じ人物の動画のid' },
   },
-  required: ['found', 'identityNote', 'wikipediaIsSamePerson', 'birthDate', 'birthPlace', 'occupation', 'career', 'specialty', 'intro', 'perspectives', 'recommendations', 'links', 'videoIds'],
+  required: ['found', 'identityNote', 'wikipediaIsSamePerson', 'birthDate', 'deathDate', 'birthPlace', 'occupation', 'career', 'specialty', 'intro', 'perspectives', 'recommendations', 'links', 'videoIds'],
 }
 
 const instructions = (name: string, books: Candidate[], wiki: WikiPage | null, topics: string[], hint: string, videos: Video[]) => `あなたは本の著者について、公開情報を調べてまとめる調査担当です。
@@ -123,7 +127,8 @@ ${videos.length ? videos.map(v => `[${v.id}] ${v.title}（チャンネル: ${v.c
 - found: 上の基準で同じ人物の公開情報が見つかったら yes、別人かもしれず確信がなければ unsure、見つからなければ no。identityNote にはその判断の理由（同姓同名の別人がいた場合はそのことも）を1文で書く。
 - wikipediaIsSamePerson: 資料Wが MyBooks の本の著者と同じ人物の記事なら true（上の基準で判断する。分野が違えば false）。
 - refs: その項目の根拠にした資料の記号（"W"・"B1" など）。Web検索の結果を根拠にした場合は refs に入れなくてよい（検索結果は自動で出典として記録される）。
-- birthDate（生年月日）・birthPlace（出身地）・occupation（職業）は短く。
+- birthDate（生年月日）・birthPlace（出身地）・occupation（職業）は短く。生年月日は西暦で「1947年7月14日」の形にする（分からない部分は省き「1947年」などにする）。
+- deathDate: 亡くなっている場合だけ、没年月日を同じ形で。存命または不明なら空文字。
 - career: 経歴（学歴・職歴・主な活動）を2〜4文で。
 - specialty: 専門分野を短く。
 - intro: 簡単な人物紹介を2文程度で。
@@ -135,7 +140,7 @@ ${videos.length ? videos.map(v => `[${v.id}] ${v.title}（チャンネル: ${v.c
 
 interface AiAnswer {
   found?: string; identityNote?: string; wikipediaIsSamePerson?: boolean
-  birthDate?: RawField; birthPlace?: RawField; occupation?: RawField; career?: RawField; specialty?: RawField; intro?: RawField
+  birthDate?: RawField; deathDate?: RawField; birthPlace?: RawField; occupation?: RawField; career?: RawField; specialty?: RawField; intro?: RawField
   perspectives?: RawField[]; recommendations?: { title?: string; note?: string; refs?: string[] }[]; links?: { label?: string; url?: string }[]; videoIds?: string[]
 }
 interface RawField { value?: string; refs?: string[] }
@@ -366,6 +371,7 @@ export async function POST(request: Request): Promise<Response> {
       identityNote: str(a.identityNote, 300),
       photo: sameWiki && wiki?.thumbnail ? { url: wiki.thumbnail, source: wikiSource } : null,
       birthDate: fact(facts?.birthDate, a.birthDate),
+      deathDate: fact(facts?.deathDate, a.deathDate),
       birthPlace: fact(facts?.birthPlace, a.birthPlace),
       occupation: fact(facts?.occupation, a.occupation),
       specialty: fact(facts?.fields, a.specialty),

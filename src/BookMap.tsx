@@ -60,7 +60,7 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
     <div className="map-foot">
       {busy ? <span className="map-progress"><LoaderCircle className="spin" />{progressLabel(progress)}{progress.total ? <progress value={progress.done} max={progress.total} /> : null}</span>
         : <span>{activeCount === points.length ? `${points.length}冊を配置` : `${points.length}冊中 ${activeCount}冊が条件に一致`}{untitled > 0 && `・タイトルのない${untitled}冊は対象外`}{pending > 0 && `・未計算 ${pending}冊`}</span>}
-      <span className="map-note">位置はタイトルと要約の内容の近さ、色は分類を表します。縦横の軸に意味はありません。</span>
+      <span className="map-note">位置はタイトルと要約の内容の近さ、色は分類を表します。軸は厳密な意味を持ちませんが、横方向は『人・社会・一般 ↔ 技術・専門』、縦方向は『言語・情報・概念 ↔ モノ・工学・実体』の傾向として見ることができます。</span>
     </div>
     {error && <div className="map-error" role="alert"><p>{error.message}</p>{error.code === 'unauthorized' && driveStatus !== 'unavailable' && <button className="primary-btn" onClick={onConnect}><Cloud /> Googleでログインして接続</button>}</div>}
     {!error && driveError && <p className="map-drive-note">マップのデータをGoogle Driveに保存できませんでした（このブラウザには保存済み）：{driveError}</p>}
@@ -249,8 +249,10 @@ function MapCanvas({ points, onSelect }: { points: Point[]; onSelect: (book: Boo
 
   const center = (factor: number) => zoomAt(factor, size.w / 2, size.h / 2)
   return <div className="map-stage" ref={wrapRef}>
+    <div className="map-guides" aria-hidden="true"><i className="h" /><i className="v" /></div>
     <canvas ref={canvasRef} role="img" aria-label="本の分類マップ。内容が近い本ほど近くに表示されます" className={shownHover ? 'pointing' : undefined}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onPointerLeave={e => { if (e.pointerType === 'mouse' && !pointers.current.size) setHover(null) }} />
+    <MapAxes />
     {points.length === 0 && <div className="map-empty"><BookOpen /><p>マップに表示できる本がまだありません</p></div>}
     <div className="map-zoom">
       <button onClick={() => center(1.5)} aria-label="拡大" title="拡大"><ZoomIn /></button>
@@ -258,6 +260,19 @@ function MapCanvas({ points, onSelect }: { points: Point[]; onSelect: (book: Boo
       <button onClick={() => setView({ k: 1, tx: 0, ty: 0 })} aria-label="全体を表示" title="全体を表示"><Maximize2 /></button>
     </div>
     {shownHover && <MapTooltip point={shownHover} pos={toScreen(shownHover)} size={size} touch={!window.matchMedia('(hover: hover)').matches} />}
+  </div>
+}
+
+/**
+ * 軸の読み方の目安。配置（UMAP）の軸そのものに意味はないが、見る人の手がかりとして四辺に傾向を添える。
+ * 埋め込みや配置の計算から求めたものではなく、ズーム・移動しても画面の枠に固定して表示する。
+ */
+function MapAxes() {
+  return <div className="map-axes" aria-hidden="true">
+    <span className="left">← 人・社会・一般</span>
+    <span className="right">技術・専門 →</span>
+    <span className="top">↑ モノ・工学・実体</span>
+    <span className="bottom">↓ 言語・情報・概念</span>
   </div>
 }
 

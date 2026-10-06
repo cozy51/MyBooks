@@ -23,7 +23,7 @@ export interface SearchIndex {
 const emptyIndex = (): SearchIndex => ({ version: 1, model: '', updatedAt: '', entries: {} })
 
 /** 分類の表示名（親分類 / 子分類） */
-function categoryName(id: string): string {
+export function categoryName(id: string): string {
   const child = categories.find(c => c.id === id)
   const parent = categories.find(c => c.id === child?.parent)
   return [parent?.name, child?.name].filter(Boolean).join(' / ')

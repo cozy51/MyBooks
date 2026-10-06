@@ -3,14 +3,8 @@ import { BookOpen, ChevronRight, LoaderCircle, Sparkles, UserRound } from 'lucid
 import { CoverImage } from './CoverImage'
 import { categories, statusClass } from './data'
 import { embedText, findSimilarBooks, updateBookMap, type SimilarBook } from './bookMapData'
+import { authorKeys } from './authors'
 import type { Book } from './types'
-
-/** 著者名を比較用にそろえる（全角半角・空白の違いと「著」「編」などの役割表記を無視し、複数の著者は分ける） */
-function authorKeys(author: string): string[] {
-  return author.normalize('NFKC').split(/[、,;／/&＋+]|\s+and\s+/i)
-    .map(name => name.replace(/[(（[［].*?[)）\]］]/g, '').replace(/\s*(編著|共著|監修|監訳|編集|原著|著|編|訳|作|文|絵)\s*$/, '').replace(/\s+/g, '').toLowerCase())
-    .filter(Boolean)
-}
 
 /** 同じ著者（共著者のいずれかが同じ）の本。タイトル順 */
 function sameAuthorBooks(book: Book, books: Book[]): Book[] {
@@ -29,9 +23,9 @@ function ScoreBar({ score, ratio }: { score: number; ratio: number }) {
   </span>
 }
 
-function RelatedRow({ book, score, ratio, onOpen }: { book: Book; score?: number; ratio?: number; onOpen: (b: Book) => void }) {
+export function RelatedRow({ book, score, ratio, current, onOpen }: { book: Book; score?: number; ratio?: number; current?: boolean; onOpen: (b: Book) => void }) {
   const child = categories.find(c => c.id === book.categoryId)
-  return <li><button type="button" className="related-row" onClick={() => onOpen(book)}>
+  return <li className={current ? 'related-current' : undefined}><button type="button" className="related-row" onClick={() => onOpen(book)}>
     <span className="related-cover"><CoverImage src={book.cover} alt="" width={160} fallback={<BookOpen />} /></span>
     <span className="related-body">
       <strong>{book.title}</strong>
@@ -39,6 +33,7 @@ function RelatedRow({ book, score, ratio, onOpen }: { book: Book; score?: number
       {book.memo.trim() && <span className="related-memo">{book.memo.trim().slice(0, 80)}{book.memo.trim().length > 80 && '…'}</span>}
     </span>
     <span className="related-side">
+      {current && <span className="related-current-label">表示中</span>}
       {score !== undefined && <ScoreBar score={score} ratio={ratio ?? 1} />}
       <span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>
       <ChevronRight />

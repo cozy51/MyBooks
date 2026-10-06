@@ -5,10 +5,11 @@
 //   3. MyBooks に登録されているこの著者の本（タイトル・分類・要約）
 // AIの答えの各項目には、根拠にした情報源（Wikipedia・MyBooksの本・検索結果のページ）を付ける。
 // どの情報源にも結びつかない項目は、検索結果が1件も無いときは捨て、検索結果があるときは「出典未確認」として返す。
-// 同姓同名の別人の情報を混ぜないよう、MyBooks の著書と照らして同じ人物かをAIに確かめてもらう。
+// 同姓同名の別人の情報を混ぜないよう、名前だけでなく MyBooks の著書名・分野（と利用者が入れた手がかり）を組み合わせて検索し、
+// 検索結果・Wikipedia・動画のそれぞれについて、著書の著者と同じ人物かを確かめてから使う。
 //   AUTHOR_MODEL … モデル名を変えるときだけ設定（既定: gemini-flash-latest / gpt-4.1-mini）
 //   YOUTUBE_API_KEY … 設定すると、YouTube Data API で講演・インタビュー・対談の動画を探す（未設定ならYouTubeの検索リンクだけ）
-// リクエスト: { name: string, books: { id, title, category, summary }[] }
+// リクエスト: { name: string, books: { id, title, category, summary }[], hint?: 所属・分野など人物を見分ける手がかり }
 import { authorized, fetchBefore, geminiModels, notConfigured, provider, reply, unauthorized, upstreamFailure, UpstreamError, type Provider } from './_lib.js'
 
 /** 全体の制限時間（vercel.json の実行上限60秒より短くし、必ず応答を返す） */
@@ -91,15 +92,16 @@ const SCHEMA = {
     perspectives: { type: 'ARRAY', items: FIELD },
     recommendations: { type: 'ARRAY', items: { type: 'OBJECT', properties: { title: { type: 'STRING' }, note: { type: 'STRING' }, refs: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['title', 'note', 'refs'] } },
     links: { type: 'ARRAY', items: { type: 'OBJECT', properties: { label: { type: 'STRING' }, url: { type: 'STRING' } }, required: ['label', 'url'] } },
+    videoIds: { type: 'ARRAY', items: { type: 'STRING' }, description: 'MyBooksの著書の著者と同じ人物の動画のid' },
   },
-  required: ['found', 'identityNote', 'wikipediaIsSamePerson', 'birthDate', 'birthPlace', 'occupation', 'career', 'specialty', 'intro', 'perspectives', 'recommendations', 'links'],
+  required: ['found', 'identityNote', 'wikipediaIsSamePerson', 'birthDate', 'birthPlace', 'occupation', 'career', 'specialty', 'intro', 'perspectives', 'recommendations', 'links', 'videoIds'],
 }
 
-const instructions = (name: string, books: Candidate[], wiki: WikiPage | null) => `あなたは本の著者について、公開情報を調べてまとめる調査担当です。
+const instructions = (name: string, books: Candidate[], wiki: WikiPage | null, topics: string[], hint: string, videos: Video[]) => `あなたは本の著者について、公開情報を調べてまとめる調査担当です。
 次の著者について、Web検索で公開情報を調べ、下の資料とあわせてプロフィールをまとめてください。
 
 # 著者
-${name}
+${name}（著書の分野: ${topics.join('・') || '不明'}）${hint ? `\n人物を見分ける手がかり（利用者が入力）: ${hint}` : ''}
 
 # この著者の本として MyBooks に登録されている本（同じ人物かを見分ける手がかり。資料 B1〜）
 ${books.map((b, i) => `[B${i + 1}] ${b.title}${b.category ? `（分類: ${b.category}）` : ''}${b.summary ? `\n要約: ${b.summary.slice(0, 400)}` : ''}`).join('\n')}
@@ -107,11 +109,19 @@ ${books.map((b, i) => `[B${i + 1}] ${b.title}${b.category ? `（分類: ${b.cate
 # Wikipediaの記事（資料 W。同名の別人の記事のこともある）
 ${wiki ? `${wiki.title}\n${wiki.extract.slice(0, 2000)}` : '（見つかりませんでした）'}
 
+# YouTubeの動画の候補（資料 V。名前で検索したもので、同姓同名の別人の動画が多く含まれる）
+${videos.length ? videos.map(v => `[${v.id}] ${v.title}（チャンネル: ${v.channel}）${v.description ? ` ${v.description}` : ''}`).join('\n') : '（なし）'}
+
+# 検索のしかた
+- 著者名だけで検索しない。同姓同名の別人（スポーツ選手・芸能人など）が上位に出やすいため、必ず「${name} ${books[0]?.title ?? ''}」のように著者名と著書名、または著者名と分野（${topics.join('・') || '著書の分野'}）${hint ? '・手がかり' : ''}を組み合わせて検索する。
+- 出版社・書店（Amazonの著者ページなど）・所属先の著者紹介は、本人を見分けやすい情報源として優先する。
+
 # ルール
 - 書いてよいのは、Web検索の結果・資料W・資料B に書かれている事実だけ。あなたがもともと知っていることや推測で補わない。確かめられない項目は value を空文字にする。
 - 同姓同名の別人の情報を混ぜない。上の MyBooks の本の著者と同じ人物だと確かめられる情報だけを使う。
-- found: 同じ人物の公開情報が見つかったら yes、別人かもしれず確信がなければ unsure、見つからなければ no。identityNote にはその判断の理由（同姓同名の人物がいる場合はそのこと）を1文で書く。
-- wikipediaIsSamePerson: 資料Wが MyBooks の本の著者と同じ人物の記事なら true。
+- 同じ人物かの判断: そのページや資料に、MyBooks の著書名のどれか、または著書の分野（${topics.join('・') || '著書の分野'}）の仕事・活動が書かれているときだけ同じ人物とみなす。名前が同じだけのページは別人として扱い、一切使わない。
+- found: 上の基準で同じ人物の公開情報が見つかったら yes、別人かもしれず確信がなければ unsure、見つからなければ no。identityNote にはその判断の理由（同姓同名の別人がいた場合はそのことも）を1文で書く。
+- wikipediaIsSamePerson: 資料Wが MyBooks の本の著者と同じ人物の記事なら true（上の基準で判断する。分野が違えば false）。
 - refs: その項目の根拠にした資料の記号（"W"・"B1" など）。Web検索の結果を根拠にした場合は refs に入れなくてよい（検索結果は自動で出典として記録される）。
 - birthDate（生年月日）・birthPlace（出身地）・occupation（職業）は短く。
 - career: 経歴（学歴・職歴・主な活動）を2〜4文で。
@@ -120,12 +130,13 @@ ${wiki ? `${wiki.title}\n${wiki.extract.slice(0, 2000)}` : '（見つかりま�
 - perspectives: 著書や公開インタビュー・講演などから分かる考え方や特徴（2〜4個）。性格を断定しない。「〜を重視している」「〜と述べている」「著書では〜を一貫して扱っている」のように、根拠のある著書・発言に基づく書き方にする。
 - recommendations: この著者の代表作・人気作・おすすめの本（最大8冊）。Web上の公開情報（出版社・書店のランキング・書評・Wikipedia など）で確かめられたものだけ。title は書名だけ、note はおすすめの理由（代表作・ロングセラー・受賞など、根拠のある内容）を1文で。
 - links: 著者の公式サイト・所属先のプロフィールページ・公式SNSなど、検索結果で確認できたURLだけ（無ければ空の配列）。
+- videoIds: 資料Vのうち、題名・チャンネル・説明から MyBooks の著書の著者本人の講演・インタビュー・対談・解説などだと分かる動画の id だけ。分野が違う動画（同姓同名のスポーツ選手・芸能人など）や、本人か分からない動画は入れない。
 - 日本語で答える。`
 
 interface AiAnswer {
   found?: string; identityNote?: string; wikipediaIsSamePerson?: boolean
   birthDate?: RawField; birthPlace?: RawField; occupation?: RawField; career?: RawField; specialty?: RawField; intro?: RawField
-  perspectives?: RawField[]; recommendations?: { title?: string; note?: string; refs?: string[] }[]; links?: { label?: string; url?: string }[]
+  perspectives?: RawField[]; recommendations?: { title?: string; note?: string; refs?: string[] }[]; links?: { label?: string; url?: string }[]; videoIds?: string[]
 }
 interface RawField { value?: string; refs?: string[] }
 /** text: AIの答え（JSON） / citations: 答えの文字範囲と、その根拠になった検索結果 / web: 検索結果のページ */
@@ -215,27 +226,49 @@ async function resolveUrl(url: string): Promise<string> {
 
 // ---- YouTube ----
 
-export interface Video { id: string; title: string; channel: string; publishedAt: string; thumbnail: string; url: string; kind: 'lecture' | 'interview' | 'talk' | 'other' }
+export interface Video { id: string; title: string; channel: string; publishedAt: string; thumbnail: string; url: string; kind: 'lecture' | 'interview' | 'talk' | 'other'; description?: string }
 const VIDEO_KIND: [Video['kind'], RegExp][] = [['lecture', /講演|講義|セミナー|講座|基調|ウェビナー|lecture|keynote|seminar/i], ['interview', /インタビュー|interview|取材|に聞く|語る/i], ['talk', /対談|鼎談|対話|トーク|座談|talk|クロストーク/i]]
 
-async function searchVideos(deadline: number, name: string): Promise<Video[] | null> {
+/**
+ * YouTube の動画の候補。名前だけで探すと同姓同名の別人の動画ばかりになるため、著者名と分野・手がかりの組み合わせでも探す。
+ * ここで集めるのは候補だけで、同じ人物かどうかはAIが著書と照らして判断する
+ */
+async function searchVideos(deadline: number, name: string, topics: string[]): Promise<Video[] | null> {
   const key = process.env.YOUTUBE_API_KEY?.trim()
   if (!key) return null
-  const q = `${name} 講演|インタビュー|対談`
-  const res = await fetchBefore(deadline, `https://www.googleapis.com/youtube/v3/search?${new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '20', relevanceLanguage: 'ja', regionCode: 'JP', safeSearch: 'moderate', q, key })}`)
-  if (!res.ok) { console.error('youtube search failed', res.status, (await res.text()).slice(0, 200)); return [] }
-  const data = await res.json() as { items?: { id?: { videoId?: string }; snippet?: { title?: string; description?: string; channelTitle?: string; publishedAt?: string; thumbnails?: { medium?: { url?: string }; high?: { url?: string } } } }[] }
+  const queries = [...topics.slice(0, 2).map(t => `${name} ${t}`), `${name} 講演|インタビュー|対談`]
   const target = compact(name)
   const decode = (s: string) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-  return (data.items ?? []).flatMap(item => {
+  const results = await Promise.all(queries.map(async q => {
+    const res = await fetchBefore(deadline, `https://www.googleapis.com/youtube/v3/search?${new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '15', relevanceLanguage: 'ja', regionCode: 'JP', safeSearch: 'moderate', q, key })}`)
+    if (!res.ok) { console.error('youtube search failed', res.status, (await res.text()).slice(0, 200)); return [] }
+    const data = await res.json() as { items?: { id?: { videoId?: string }; snippet?: { title?: string; description?: string; channelTitle?: string; publishedAt?: string; thumbnails?: { medium?: { url?: string }; high?: { url?: string } } } }[] }
+    return data.items ?? []
+  }).map(p => p.catch(() => [])))
+  const seen = new Set<string>()
+  return results.flat().flatMap(item => {
     const id = item.id?.videoId, s = item.snippet
-    if (!id || !s) return []
-    const title = decode(s.title ?? ''), text = compact(`${title} ${s.description ?? ''} ${s.channelTitle ?? ''}`)
+    if (!id || !s || seen.has(id)) return []
+    seen.add(id)
+    const title = decode(s.title ?? ''), description = decode(s.description ?? '').replace(/\s+/g, ' ').slice(0, 150)
     // 著者名が動画の題名・説明・チャンネル名に含まれるものだけ（関係のない動画を減らす）
-    if (!text.includes(target)) return []
-    const kind = VIDEO_KIND.find(([, re]) => re.test(`${title} ${s.description ?? ''}`))?.[0] ?? 'other'
-    return [{ id, title, channel: decode(s.channelTitle ?? ''), publishedAt: s.publishedAt ?? '', thumbnail: s.thumbnails?.medium?.url ?? s.thumbnails?.high?.url ?? `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, url: `https://www.youtube.com/watch?v=${id}`, kind }]
-  }).sort((a, b) => Number(a.kind === 'other') - Number(b.kind === 'other')).slice(0, 12)
+    if (!compact(`${title} ${description} ${s.channelTitle ?? ''}`).includes(target)) return []
+    const kind = VIDEO_KIND.find(([, re]) => re.test(`${title} ${description}`))?.[0] ?? 'other'
+    return [{ id, title, description, channel: decode(s.channelTitle ?? ''), publishedAt: s.publishedAt ?? '', thumbnail: s.thumbnails?.medium?.url ?? s.thumbnails?.high?.url ?? `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, url: `https://www.youtube.com/watch?v=${id}`, kind }]
+  }).slice(0, 30)
+}
+
+/** 著書の分野（「A-1: 設計・製図・CAD」→「設計」「製図」…）と利用者の手がかり。検索と同じ人物かの判断に使う */
+function topicsOf(books: Candidate[], hint: string): string[] {
+  const count = new Map<string, number>()
+  for (const b of books) {
+    // 子分類の言葉（設計・製図…）を優先し、親分類（機械工学）は少し後ろにする
+    const [parent, child] = b.category.includes('/') ? b.category.split('/').map(t => t.trim()) : ['', b.category.trim()]
+    const words = [...(child ?? '').replace(/^[A-Z]-\d+\s*[:：]\s*/i, '').split(/[・、,，\s/]+/), parent.replace(/^[A-Z][.．]\s*/i, '')]
+    words.forEach((word, i) => { if (word.length >= 2) count.set(word, (count.get(word) ?? 0) + (i === words.length - 1 ? 0.5 : 1)) })
+  }
+  const words = [...count].sort((a, b) => b[1] - a[1]).map(([w]) => w)
+  return [...new Set([...hint.split(/[\s、,，・]+/).filter(w => w.length >= 2), ...words])].slice(0, 4)
 }
 
 // ---- まとめる ----
@@ -247,20 +280,27 @@ export async function POST(request: Request): Promise<Response> {
   if (!p) return notConfigured()
   if (!await authorized(request)) return unauthorized()
 
-  let body: { name?: unknown; books?: unknown }
+  let body: { name?: unknown; books?: unknown; hint?: unknown }
   try { body = await request.json() } catch { return reply(400, { error: 'リクエストの形式が正しくありません' }) }
   const name = str(body.name, 100).replace(/[\s\u3000]+/g, ' ')
   if (!name) return reply(400, { error: '著者名を指定してください' })
   const books: Candidate[] = (Array.isArray(body.books) ? body.books as Record<string, unknown>[] : [])
     .map(b => ({ id: str(b?.id, 100), title: str(b?.title, 300), category: str(b?.category, 100), summary: str(b?.summary, 800) }))
     .filter(b => b.id && b.title).slice(0, MAX_BOOKS)
+  const hint = str(body.hint, 100)
+  const topics = topicsOf(books, hint)
 
   const deadline = Date.now() + TIME_LIMIT
   try {
-    const [wiki, videos] = await Promise.all([findWikiPage(deadline, name).catch(() => null), searchVideos(deadline, name).catch(() => [] as Video[])])
-    const ai = p.name === 'gemini' ? await askGemini(p, instructions(name, books, wiki), deadline) : await askOpenAI(p, instructions(name, books, wiki), deadline)
+    const [wiki, videoCandidates] = await Promise.all([findWikiPage(deadline, name).catch(() => null), searchVideos(deadline, name, topics).catch(() => [] as Video[])])
+    const prompt = instructions(name, books, wiki, topics, hint, videoCandidates ?? [])
+    const ai = p.name === 'gemini' ? await askGemini(p, prompt, deadline) : await askOpenAI(p, prompt, deadline)
     const a = ai.answer
-    const sameWiki = Boolean(wiki && a.wikipediaIsSamePerson === true)
+    const found = a.found === 'yes' || a.found === 'unsure' || a.found === 'no' ? a.found : 'unsure'
+    // Wikipediaの記事は、AIが同じ人物と判断し、さらに記事に著書名か分野の言葉が書かれているときだけ使う（名前が同じだけの記事を使わない）
+    const extract = wiki ? compact(wiki.extract) : ''
+    const mentionsWork = books.some(b => compact(b.title).length >= 4 && extract.includes(compact(b.title).slice(0, 8))) || topics.some(t => extract.includes(compact(t)))
+    const sameWiki = Boolean(wiki && a.wikipediaIsSamePerson === true && found !== 'no' && mentionsWork)
     const facts = sameWiki && wiki?.wikidata ? await wikidataFacts(deadline, wiki.wikidata).catch(() => null) : null
 
     // 情報源の一覧（番号で参照する）
@@ -271,7 +311,9 @@ export async function POST(request: Request): Promise<Response> {
     const resolved = await Promise.all(ai.web.map(w => resolveUrl(w.url)))
     const webSource = ai.web.map((w, i) => /^https?:\/\//.test(resolved[i]) ? addSource({ kind: 'web', title: w.title || new URL(resolved[i]).hostname, url: resolved[i] }) : -1)
     const bookSource = (i: number) => books[i] ? addSource({ kind: 'mybooks', title: `MyBooks「${books[i].title}」`, bookId: books[i].id }) : -1
-    const hasWeb = webSource.some(i => i >= 0)
+    // 同じ人物の公開情報が見つからなかったときは、検索結果は別人のものとみなして使わない
+    const trustWeb = found !== 'no'
+    const hasWeb = trustWeb && webSource.some(i => i >= 0)
 
     const refSources = (refs: unknown): number[] => (Array.isArray(refs) ? refs : []).flatMap(r => {
       const ref = String(r).trim().toUpperCase()
@@ -285,6 +327,7 @@ export async function POST(request: Request): Promise<Response> {
       const start = ai.text.indexOf(escaped)
       if (start < 0) return []
       const end = start + escaped.length
+      if (!trustWeb) return []
       return [...new Set(ai.citations.filter(c => c.start < end && c.end > start).flatMap(c => c.web.map(i => webSource[i])).filter(i => i >= 0))]
     }
     const field = (raw: RawField | undefined, max = 600): Field | null => {
@@ -292,8 +335,8 @@ export async function POST(request: Request): Promise<Response> {
       if (!value) return null
       const src = [...new Set([...refSources(raw?.refs), ...citedWeb(raw?.value ?? '')])]
       if (src.length) return { value, sources: src }
-      // どの情報源とも結びつかない項目は、検索結果が無ければ推測とみなして捨てる
-      return hasWeb ? { value, sources: [], unverified: true } : null
+      // どの情報源とも結びつかない項目は推測とみなして捨てる。同じ人物の情報が見つかったときだけ「出典未確認」として残す
+      return hasWeb && found === 'yes' ? { value, sources: [], unverified: true } : null
     }
     const fact = (value: string | undefined, fallback: RawField | undefined, max = 200): Field | null => value ? { value, sources: [dataSource] } : field(fallback, max)
 
@@ -313,9 +356,13 @@ export async function POST(request: Request): Promise<Response> {
       try { return label && /^https:\/\//.test(url) && hosts.has(new URL(url).hostname.replace(/^www\./, '')) ? [{ label, url }] : [] } catch { return [] }
     }).slice(0, 8)
 
+    // 動画は、AIが著書の著者本人のものと判断したものだけ
+    const picked = new Set((a.videoIds ?? []).map(id => String(id).replace(/^V?\[?|\]$/g, '').trim()))
+    const videos = videoCandidates && videoCandidates.filter(v => picked.has(v.id)).sort((x, y) => Number(x.kind === 'other') - Number(y.kind === 'other')).slice(0, 12).map(v => ({ ...v, description: undefined }))
+
     return reply(200, {
       name,
-      found: a.found === 'yes' || a.found === 'unsure' || a.found === 'no' ? a.found : 'unsure',
+      found,
       identityNote: str(a.identityNote, 300),
       photo: sameWiki && wiki?.thumbnail ? { url: wiki.thumbnail, source: wikiSource } : null,
       birthDate: fact(facts?.birthDate, a.birthDate),
@@ -330,6 +377,8 @@ export async function POST(request: Request): Promise<Response> {
       videos,
       sources,
       queries: ai.queries.slice(0, 8),
+      topics,
+      hint,
       fetchedAt: new Date().toISOString(),
     })
   } catch (e) {

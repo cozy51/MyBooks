@@ -13,6 +13,7 @@ import { readToken, STALL_LIMIT, SummaryError, summarizeScan, type SummaryFailur
 import { scanFileName } from './scanCheck'
 import { rankBooks, wantsSemantic } from './semanticSearch'
 import { useSemanticSearch } from './useSemanticSearch'
+import { AiPicksModal } from './AiPicks'
 import type { Book, BookLink, ReadingStatus } from './types'
 
 // 分類マップ（UMAPなど）は「マップ」を開いたときだけ読み込む
@@ -98,6 +99,7 @@ function App() {
   const openBook = (book: Book | null) => { setModalTab('edit'); setEditing(book) }
   const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null)
   const [backupOpen, setBackupOpen] = useState(false)
+  const [aiPicksOpen, setAiPicksOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const storeBooks = useCallback((books: Book[]) => { const next = withCoverIds(books); setBooks(next); localStorage.setItem(STORE, JSON.stringify(next)) }, [])
@@ -295,6 +297,7 @@ function App() {
 
       <section className="toolbar panel">
         <label className="search"><Search /><input value={query} onChange={e => setQuery(e.target.value)} placeholder={semanticOn ? 'タイトル、著者、キーワード、文章から意味検索' : 'タイトル、著者、分類、要約、基準月（YYYY-MM）から検索'} />{query && <button type="button" onClick={() => setQuery('')} aria-label="検索語を消す"><X /></button>}<button type="button" className={`semantic-toggle${semanticOn ? ' active' : ''}`} aria-pressed={semanticOn} onClick={e => { e.preventDefault(); setSemanticOn(!semanticOn); writeFlag(SEMANTIC_KEY, !semanticOn) }} title={semanticOn ? '意味検索：オン（押すとキーワード検索だけにします）' : '意味検索：オフ（押すと意味の近さでも検索します）'}><Sparkles /><span>意味検索</span></button></label>
+        <button type="button" className="ai-pick-btn" onClick={() => setAiPicksOpen(true)} title="AI選書：知りたいこと・困っていることを文章で入力すると、登録されている本の中から内容が合う本を選びます"><Sparkles /> AI選書</button>
         <select value={category} onChange={e => setCategory(e.target.value)} aria-label="分類で絞り込み"><option value="all">すべての分類</option>{categories.map(c => <option key={c.id} value={c.id}>{c.parent ? '　└ ' : ''}{c.name}</option>)}</select>
         <select value={status} onChange={e => setStatus(e.target.value)} aria-label="読書状況で絞り込み"><option value="all">すべての読書状況</option><option>未読</option><option>読書中</option><option>読了</option></select>
       </section>
@@ -313,6 +316,7 @@ function App() {
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {notices.length > 0 && <div className="notices" role="status">{notices.map(n => <p key={n.id} className={n.error ? 'error' : undefined}>{n.error ? <CloudAlert /> : <Check />}{n.text}<button type="button" aria-label="閉じる" onClick={() => setNotices(list => list.filter(x => x.id !== n.id))}><X /></button></p>)}</div>}
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
+    {aiPicksOpen && <AiPicksModal books={books} driveStatus={drive.status} onConnect={() => void drive.connect()} onOpen={openBook} onClose={() => setAiPicksOpen(false)} />}
     {editing && <BookModal key={editing.id} book={editing} books={books} summaryJob={summaryJobs.get(editing.id)} summaryIssue={summaryIssues[editing.id]} onCancelSummary={() => cancelSummary(editing.id)} onSummarize={startSummary} onSummaryApplied={() => dropJob(editing.id)} tab={modalTab} onTab={setModalTab} onOpen={openBook} nav={bookNav} onStep={stepBook} keysBlocked={Boolean(zoomed)} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const prev = books.find(b => b.id === book.id); if (summaryIssues[book.id]?.kind === 'mismatch' && (scanLink(prev?.links ?? []) !== scanLink(book.links) || prev?.title !== book.title)) setIssue(book.id, null); const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); if (open) openBook(open); else setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />

@@ -39,3 +39,5 @@
 .hub-age{display:inline-block;margin-left:7px;font-size:11px;font-weight:800;color:var(--purple);background:#eee8fc;border-radius:100px;padding:1px 8px;vertical-align:1px;white-space:nowrap}.hub-age.deceased{color:#5d5668;background:#f1eff4}
 .related-row{cursor:pointer}.related-row:focus-visible{outline:2px solid #8256dd;outline-offset:2px}.related-title{display:flex;align-items:center;gap:7px;min-width:0}.related-title strong{min-width:0}.copy-mini{flex:0 0 auto;cursor:pointer}.hub-section h4 .copy-mini{margin-left:4px;font-weight:700}
 .hub-pick-title{display:flex;align-items:flex-start;gap:7px}.hub-pick-title strong{min-width:0}.hub-pick-title .copy-mini{margin-top:2px}
+.cover-editor>img{background:#eeebef;padding:12px;border-radius:10px}
+@media(max-width:650px){.cover-editor>img{padding:7px;border-radius:8px}}

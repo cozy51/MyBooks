@@ -4,6 +4,7 @@ import { CoverImage } from './CoverImage'
 import { categories, statusClass } from './data'
 import { embedText, findSimilarBooks, updateBookMap, type SimilarBook } from './bookMapData'
 import { authorKeys } from './authors'
+import { CopyButton } from './CopyButton'
 import type { Book } from './types'
 
 /** 同じ著者（共著者のいずれかが同じ）の本。タイトル順 */
@@ -23,12 +24,14 @@ function ScoreBar({ score, ratio }: { score: number; ratio: number }) {
   </span>
 }
 
-export function RelatedRow({ book, score, ratio, current, onOpen }: { book: Book; score?: number; ratio?: number; current?: boolean; onOpen: (b: Book) => void }) {
+/** copy: タイトルの横にコピーボタンを出す（タイトルと要約をコピーする。読み上げアプリ用） */
+export function RelatedRow({ book, score, ratio, current, copy, onOpen }: { book: Book; score?: number; ratio?: number; current?: boolean; copy?: boolean; onOpen: (b: Book) => void }) {
   const child = categories.find(c => c.id === book.categoryId)
-  return <li className={current ? 'related-current' : undefined}><button type="button" className="related-row" onClick={() => onOpen(book)}>
+  // コピーボタンを中に置けるよう、行全体はボタン要素ではなく role="button" にする
+  return <li className={current ? 'related-current' : undefined}><div role="button" tabIndex={0} className="related-row" onClick={() => onOpen(book)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(book) } }}>
     <span className="related-cover"><CoverImage src={book.cover} alt="" width={160} fallback={<BookOpen />} /></span>
     <span className="related-body">
-      <strong>{book.title}</strong>
+      <span className="related-title"><strong>{book.title}</strong>{copy && <CopyButton text={[book.title.trim(), book.memo.trim()].filter(Boolean).join('\n')} title={`「${book.title}」のタイトルと要約をコピー`} />}</span>
       <small>{book.author || '著者未登録'}{child && ` ・ ${child.name}`}</small>
       {book.memo.trim() && <span className="related-memo">{book.memo.trim().slice(0, 80)}{book.memo.trim().length > 80 && '…'}</span>}
     </span>
@@ -38,7 +41,7 @@ export function RelatedRow({ book, score, ratio, current, onOpen }: { book: Book
       <span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>
       <ChevronRight />
     </span>
-  </button></li>
+  </div></li>
 }
 
 /** 分類マップと同じEmbeddingを使って、内容が近い本を10冊表示する */

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BookMarked, Fingerprint, BookOpen, CircleAlert, ExternalLink, Film, Globe, Info, Link2, LoaderCircle, RefreshCw, Search, Sparkles, Star, UserRound, X } from 'lucide-react'
 import { RelatedRow } from './RelatedBooks'
+import { CopyButton } from './CopyButton'
 import { ageText } from './authors'
 import { booksByAuthor, fetchAuthorProfile, findOwned, loadCachedProfile, loadHint, saveHint, type AuthorProfile, type ProfileField, type ProfileSource, type Video } from './authorProfile'
 import type { Book } from './types'
@@ -103,9 +104,9 @@ function Overview({ profile, sources, onSource }: { profile: AuthorProfile; sour
     {profile.found !== 'yes' && <p className="hub-warn"><CircleAlert /> {profile.found === 'no' ? 'この著者についての公開情報は見つかりませんでした。' : '同姓同名の別の人物の情報が含まれている可能性があります。'}{profile.identityNote && ` ${profile.identityNote}`}</p>}
     {empty ? <p className="hub-empty">情報源で確かめられたプロフィールがありません。AIの推測ではプロフィールを作らないため、表示できる項目がありません。</p> : <>
       <dl className="hub-facts">{facts.map(([label, f]) => <div key={label}><dt>{label}</dt><dd>{f ? <>{f.value}{label === '生年月日' && age && <span className={`hub-age${age.deceased ? ' deceased' : ''}`} title={age.deceased ? '没年月日までの年齢（享年）' : '生年月日から今日時点で計算した年齢'}>{age.deceased ? `享年${age.text}` : `現在${age.text}`}</span>}<Cites field={f} sources={sources} onSource={onSource} /></> : <span className="hub-none">情報源なし</span>}</dd></div>)}</dl>
-      {profile.career && <section className="hub-section"><h4>経歴</h4><p>{profile.career.value}<Cites field={profile.career} sources={sources} onSource={onSource} /></p></section>}
-      {profile.intro && <section className="hub-section"><h4>人物紹介</h4><p>{profile.intro.value}<Cites field={profile.intro} sources={sources} onSource={onSource} /></p></section>}
-      {profile.perspectives.length > 0 && <section className="hub-section"><h4>著書・発言から見える人物像・考え方</h4>
+      {profile.career && <section className="hub-section"><h4>経歴<CopyButton text={profile.career.value} title="経歴をコピー" /></h4><p>{profile.career.value}<Cites field={profile.career} sources={sources} onSource={onSource} /></p></section>}
+      {profile.intro && <section className="hub-section"><h4>人物紹介<CopyButton text={profile.intro.value} title="人物紹介をコピー" /></h4><p>{profile.intro.value}<Cites field={profile.intro} sources={sources} onSource={onSource} /></p></section>}
+      {profile.perspectives.length > 0 && <section className="hub-section"><h4>著書・発言から見える人物像・考え方<CopyButton text={profile.perspectives.map(f => f.value).join('\n')} title="人物像・考え方をコピー" /></h4>
         <ul className="hub-perspectives">{profile.perspectives.map((f, i) => <li key={i}><Sparkles />{f.value}<Cites field={f} sources={sources} onSource={onSource} /></li>)}</ul>
         <p className="hub-note">性格を断定するものではなく、著書や公開されたインタビュー・講演などから読み取れる考え方の傾向です。</p></section>}
     </>}
@@ -117,7 +118,7 @@ function OwnBooks({ name, own, currentId, onOpen }: { name: string; own: Book[];
   if (!own.length) return <p className="related-empty">{name} の本は、MyBooksに登録されていません。</p>
   return <>
     <p className="related-lead"><BookMarked /> MyBooksに登録されている {name} の本（{own.length}冊）</p>
-    <ul className="related-list">{own.map(b => <RelatedRow key={b.id} book={b} current={b.id === currentId} onOpen={onOpen} />)}</ul>
+    <ul className="related-list">{own.map(b => <RelatedRow key={b.id} book={b} current={b.id === currentId} copy onOpen={onOpen} />)}</ul>
   </>
 }
 

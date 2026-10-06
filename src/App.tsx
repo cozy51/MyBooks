@@ -260,7 +260,7 @@ function App() {
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), books }, null, 2)], { type: 'application/json' })
-    const anchor = document.createElement('a'); anchor.href = URL.createObjectURL(blob); anchor.download = `mybooks-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(anchor.href)
+    const anchor = document.createElement('a'); anchor.href = URL.createObjectURL(blob); const d = new Date(); anchor.download = `Backup_MyBooks-library_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.json`; anchor.click(); URL.revokeObjectURL(anchor.href)
   }
   const importFile = (file?: File) => {
     if (!file) return

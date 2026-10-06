@@ -131,7 +131,7 @@ function Picks({ profile, name, books, sources, onOpen }: { profile: AuthorProfi
     <ul className="hub-picks">{items.map((item, i) => <li key={i} className={item.owned ? 'owned' : undefined}>
       <span className={`hub-owned-badge${item.owned ? ' owned' : ''}`}>{item.owned ? '所蔵済み' : '未所蔵'}</span>
       <div className="hub-pick-body">
-        <strong>{item.title}</strong>
+        <span className="hub-pick-title"><strong>{item.title}</strong><CopyButton text={[item.title, item.note].filter(Boolean).join('\n')} title={`「${item.title}」の書名とおすすめの理由をコピー`} /></span>
         {item.note && <p>{item.note}</p>}
         <Cites field={item} sources={sources} />
       </div>

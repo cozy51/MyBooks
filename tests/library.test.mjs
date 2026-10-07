@@ -19,6 +19,12 @@ test('sync appends only new IDs and preserves saved analyses', () => {
  const result = library.appendVideos([old], [video(), video('bbbbbbbbbbb'), video('bbbbbbbbbbb')])
  assert.equal(result.added, 1); assert.equal(result.existing, 2); assert.equal(result.videos.length, 2); assert.equal(result.videos[0], old)
 })
+test('sync orders videos by YouTube liked order and keeps missing ones at the end', () => {
+ const a = video('aaaaaaaaaaa', { summary: '解析済み' }), b = video('bbbbbbbbbbb'), c = video('ccccccccccc')
+ const result = library.appendVideos([a, b, c], [video('ddddddddddd'), video('bbbbbbbbbbb'), video('aaaaaaaaaaa')])
+ assert.deepEqual(result.videos.map(v => v.videoId), ['ddddddddddd', 'bbbbbbbbbbb', 'aaaaaaaaaaa', 'ccccccccccc'])
+ assert.equal(result.videos[2], a); assert.equal(result.added, 1); assert.equal(result.existing, 2)
+})
 test('Drive union keeps local imports and selects the newest remote analysis', () => {
  const a = video(), b = video('bbbbbbbbbbb'), newer = video(undefined, { updatedAt: '2026-10-03', summary: '最新' })
  const merged = library.mergeVideoLibraries([a, b], [newer, video('ccccccccccc')])

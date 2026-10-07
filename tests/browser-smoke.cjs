@@ -81,9 +81,9 @@ async function main() {
   await page.getByRole('button', { name: /選択動画のみ解析/ }).click(); await page.getByText(/AI解析完了：成功 1件/).waitFor(); assert.equal(analysisCalls, 1)
   await page.getByRole('button', { name: /選択動画のみ解析/ }).click(); await page.getByText(/未解析の動画がありません/).waitFor(); assert.equal(analysisCalls, 1)
   const confirmations = []; page.on('dialog', d => { confirmations.push(d.message()); void d.accept() })
-  await page.getByRole('button', { name: '未解析動画を一括解析', exact: true }).click(); await page.getByText(/AI解析停止：成功 0件／失敗 1件／未実行 1件/).waitFor(); assert.equal(analysisCalls, 2); assert.match(confirmations[0], /2件/)
+  await page.getByRole('button', { name: /^未解析動画を一括解析/ }).click(); await page.getByText(/AI解析停止：成功 0件／失敗 1件／未実行 1件/).waitFor(); assert.equal(analysisCalls, 2); assert.match(confirmations[0], /2件/)
   failBatch = false
-  await page.getByRole('button', { name: '未解析動画を一括解析', exact: true }).click(); await page.getByText(/AI解析完了：成功 2件/).waitFor(); assert.equal(analysisCalls, 4)
+  await page.getByRole('button', { name: /^未解析動画を一括解析/ }).click(); await page.getByText(/AI解析完了：成功 2件/).waitFor(); assert.equal(analysisCalls, 4)
   await page.locator('.video-card h3').first().click(); const detail = page.getByRole('dialog', { name: '動画の詳細' }); await detail.waitFor(); await detail.getByText('重要ポイント', { exact: true }).waitFor(); await detail.getByText('20/100（0：具体、100：抽象）', { exact: true }).waitFor(); await detail.getByRole('button', { name: '閉じる' }).click()
   await page.getByRole('button', { name: 'すべて', exact: true }).click(); assert.equal(await page.locator('.book-card').count(), 4)
   if (process.env.MYBOOKS_SCREENSHOT) await page.screenshot({ path: process.env.MYBOOKS_SCREENSHOT, fullPage: true })

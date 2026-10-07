@@ -265,27 +265,42 @@ function App() {
   // 絞り込み条件が変わったら1ページ目に戻す（編集・追加では今のページのまま）
   const filterKey = `${contentType}\n${query}\n${category}\n${status}`
   // 表示中のページは再読み込みしても戻るように覚えておく（絞り込み条件ごと）
-  const [paging, setPaging] = useState(() => {
+  // 段（「すべて」のときは本と動画を混ぜずに2段に分ける）ごとのページ番号
+  const [paging, setPaging] = useState<{ key: string; pages: Record<string, number> }>(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem(PAGE_KEY) || 'null') as { key?: unknown; page?: unknown } | null
-      if (saved?.key === filterKey && Number.isInteger(saved.page) && (saved.page as number) > 0) return { key: filterKey, page: saved.page as number }
+      const saved = JSON.parse(localStorage.getItem(PAGE_KEY) || 'null') as { key?: unknown; pages?: unknown } | null
+      if (saved?.key === filterKey && saved.pages && typeof saved.pages === 'object') return { key: filterKey, pages: Object.fromEntries(Object.entries(saved.pages).filter(([, n]) => Number.isInteger(n) && n > 0)) }
     } catch { /* noop */ }
-    return { key: filterKey, page: 1 }
+    return { key: filterKey, pages: {} }
   })
   useEffect(() => { try { localStorage.setItem(PAGE_KEY, JSON.stringify(paging)) } catch { /* noop */ } }, [paging])
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  if (paging.key !== filterKey) setPaging({ key: filterKey, page: 1 })
-  const page = paging.key === filterKey ? Math.min(paging.page, pageCount) : 1
-  const pageStart = (page - 1) * PAGE_SIZE
-  const pageBooks = useMemo(() => filtered.slice(pageStart, pageStart + PAGE_SIZE), [filtered, pageStart])
-  const headingRef = useRef<HTMLDivElement>(null)
+  if (paging.key !== filterKey) setPaging({ key: filterKey, pages: {} })
+  const sections = useMemo<ListSection[]>(() => {
+    const split = contentType === 'all' ? [{ id: 'book', label: '本', items: filtered.filter(b => !isVideoItem(b)) }, { id: 'youtube', label: '動画', items: filtered.filter(isVideoItem) }] : [{ id: 'main', label: '', items: filtered }]
+    return split.map(sec => {
+      const pageCount = Math.max(1, Math.ceil(sec.items.length / PAGE_SIZE))
+      const page = paging.key === filterKey ? Math.min(paging.pages[sec.id] ?? 1, pageCount) : 1
+      const start = (page - 1) * PAGE_SIZE
+      return { ...sec, page, pageCount, start, pageItems: sec.items.slice(start, start + PAGE_SIZE) }
+    })
+  }, [contentType, filtered, paging, filterKey])
+  const splitSections = sections.length > 1
+  const single = sections[0]
   const filteredIds = useMemo(() => new Set(filtered.map(b => b.id)), [filtered])
-  const paged = view !== 'map' && pageCount > 1
-  const goPage = (next: number) => { setPaging({ key: filterKey, page: next }); headingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
-  // 詳細画面で前後の本へ移る（表示中の絞り込み・並び順のとおり。別のページの本へ移ったら、一覧もそのページにする）
-  const editIndex = editing ? filtered.findIndex(b => b.id === editing.id) : -1
-  const bookNav = editIndex >= 0 ? { prev: filtered[editIndex - 1], next: filtered[editIndex + 1], index: editIndex, total: filtered.length } : undefined
-  const stepBook = (b: Book) => { const i = filtered.findIndex(x => x.id === b.id); if (i >= 0 && view !== 'map') setPaging({ key: filterKey, page: Math.floor(i / PAGE_SIZE) + 1 }) }
+  const paged = view !== 'map' && !splitSections && single.pageCount > 1
+  const goPage = (id: string, next: number) => { setPaging(p => ({ key: filterKey, pages: { ...(p.key === filterKey ? p.pages : {}), [id]: next } })); document.getElementById(`list-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
+  // 詳細画面で前後の本へ移る（表示中の段・並び順のとおり。別のページの本へ移ったら、一覧もそのページにする）
+  const navList = useMemo(() => sections.flatMap(sec => sec.items), [sections])
+  const editIndex = editing ? navList.findIndex(b => b.id === editing.id) : -1
+  const bookNav = editIndex >= 0 ? { prev: navList[editIndex - 1], next: navList[editIndex + 1], index: editIndex, total: navList.length } : undefined
+  const stepBook = (b: Book) => {
+    if (view === 'map') return
+    for (const sec of sections) { const i = sec.items.findIndex(x => x.id === b.id); if (i >= 0) { setPaging(p => ({ key: filterKey, pages: { ...(p.key === filterKey ? p.pages : {}), [sec.id]: Math.floor(i / PAGE_SIZE) + 1 } })); return } }
+  }
+  // 一覧（カード／リスト）の描画。番号は段ごとに1から数える
+  const renderItems = (items: Book[], start: number) => view === 'cards' ?
+    <div className="book-grid">{items.map((book, i) => isVideoItem(book) ? <VideoCard key={book.id} onUnlike={() => void videoLibrary.unlike(videoLibrary.videos.find(v => v.id === book.id)!)} busy={analysis.pending.has(book.id)} onAnalyze={() => void analysis.run(videoLibrary.videos.filter(v => v.id === book.id))} video={videoLibrary.videos.find(v => v.id === book.id)!} onOpen={() => setEditingVideo(book.id)} selected={selectedVideos.has(book.id)} onSelect={() => setSelectedVideos(s => { const next = new Set(s); if (next.has(book.id)) next.delete(book.id); else next.add(book.id); return next })} /> : <BookCard key={book.id} no={start + i + 1} book={books.find(b => b.id === book.id) ?? book} score={debug ? scores?.get(book.id) : undefined} summary={summaryJobs.get(book.id)} issue={summaryIssues[book.id]} onCancelSummary={cancelSummary} onAutofill={startCoverAndSummary} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
+    <BookTable books={items} startNo={start + 1} scores={debug ? scores : null} onSelect={openItem} />
 
   const exportJson = () => {
     if (videoLibrary.storageError) { alert('動画データを読み込めないため、完全なバックアップを書き出せません。元の動画データを復元してから再試行してください。'); return }
@@ -334,15 +349,18 @@ function App() {
       </section>
       {semanticOn && query.trim() && <SemanticStatus semantic={semantic} query={query} ranked={Boolean(scores)} driveStatus={drive.status} debug={debug} onDebug={v => { setDebug(v); writeFlag(DEBUG_KEY, v) }} onConnect={() => void drive.connect()} />}
 
-      <div className="content-heading" ref={headingRef}><div><h2>{scores ? '意味の近い順' : contentType === 'youtube' ? 'すべての動画' : contentType === 'all' ? 'すべてのライブラリ' : 'すべての本'}</h2><span>{paged ? `${filtered.length}${contentType === 'book' ? '冊の本' : contentType === 'youtube' ? '本の動画' : '件のライブラリ'}のうち ${pageStart + 1}〜${pageStart + pageBooks.length}${contentType === 'book' ? '冊' : contentType === 'youtube' ? '本' : '件'}を表示` : `${filtered.length}${contentType === 'book' ? '冊の本' : contentType === 'youtube' ? '本の動画' : '件のライブラリ'}を表示`}</span></div><div className="heading-controls"><div className="view-switch type-switch" role="group" aria-label="コンテンツの種類">{(['all', 'book', 'youtube'] as const).map(t => <button key={t} className={contentType === t ? 'active' : ''} aria-pressed={contentType === t} onClick={() => { setContentType(t); setStatus('all') }}>{t === 'all' ? 'すべて' : t === 'book' ? '本' : 'YouTube'}</button>)}</div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}><MapIcon /> マップ</button></div></div></div>
+      <div className="content-heading" id="list-main"><div><h2>{scores ? '意味の近い順' : contentType === 'youtube' ? 'すべての動画' : contentType === 'all' ? 'すべてのライブラリ' : 'すべての本'}</h2><span>{paged ? `${filtered.length}${contentType === 'book' ? '冊の本' : '本の動画'}のうち ${single.start + 1}〜${single.start + single.pageItems.length}${contentType === 'book' ? '冊' : '本'}を表示` : `${filtered.length}${contentType === 'book' ? '冊の本' : contentType === 'youtube' ? '本の動画' : '件のライブラリ'}を表示`}</span></div><div className="heading-controls"><div className="view-switch type-switch" role="group" aria-label="コンテンツの種類">{(['all', 'book', 'youtube'] as const).map(t => <button key={t} className={contentType === t ? 'active' : ''} aria-pressed={contentType === t} onClick={() => { setContentType(t); setStatus('all') }}>{t === 'all' ? 'すべて' : t === 'book' ? '本' : 'YouTube'}</button>)}</div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}><MapIcon /> マップ</button></div></div></div>
 
-      {paged && <Pager page={page} pageCount={pageCount} onChange={goPage} />}
+      {paged && <Pager page={single.page} pageCount={single.pageCount} onChange={n => goPage(single.id, n)} />}
       {view === 'map' && displayedItems.length > 0 ? <Suspense fallback={<div className="book-map panel map-loading"><LoaderCircle className="spin" /> マップを準備しています…</div>}>
         <BookMap books={libraryItems} visibleIds={filteredIds} category={category} onCategory={setCategory} onSelect={openItem} driveStatus={drive.status} onConnect={() => void drive.connect()} />
-      </Suspense> : filtered.length === 0 ? contentType === 'book' ? <Empty onAdd={() => openBook(emptyBook())} hasBooks={books.length > 0} /> : <div className="empty panel"><h2>{query || category !== 'all' ? '条件に合う項目がありません' : 'YouTubeと同期して、高評価動画を取り込みましょう'}</h2><p>動画の取得とAI解析は別々に実行できます。</p></div> : view === 'cards' ?
-        <div className="book-grid">{pageBooks.map((book, i) => 'type' in book && book.type === 'youtube' ? <VideoCard key={book.id} onUnlike={() => void videoLibrary.unlike(videoLibrary.videos.find(v => v.id === book.id)!)} busy={analysis.pending.has(book.id)} onAnalyze={() => void analysis.run(videoLibrary.videos.filter(v => v.id === book.id))} video={videoLibrary.videos.find(v => v.id === book.id)!} onOpen={() => setEditingVideo(book.id)} selected={selectedVideos.has(book.id)} onSelect={() => setSelectedVideos(s => { const next = new Set(s); if (next.has(book.id)) next.delete(book.id); else next.add(book.id); return next })} /> : <BookCard key={book.id} no={pageStart + i + 1} book={books.find(b => b.id === book.id) ?? book} score={debug ? scores?.get(book.id) : undefined} summary={summaryJobs.get(book.id)} issue={summaryIssues[book.id]} onCancelSummary={cancelSummary} onAutofill={startCoverAndSummary} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
-        <BookTable books={pageBooks} startNo={pageStart + 1} scores={debug ? scores : null} onSelect={openItem} />}
-      {paged && <Pager className="pager-bottom" page={page} pageCount={pageCount} onChange={goPage} />}
+      </Suspense> : filtered.length > 0 && splitSections ? sections.map(sec => <section key={sec.id} className="list-section">
+        <div className="content-heading section-heading" id={`list-${sec.id}`}><div><h3>{sec.label}</h3><span>{sec.pageCount > 1 ? `${sec.items.length}${sec.id === 'book' ? '冊の本' : '本の動画'}のうち ${sec.start + 1}〜${sec.start + sec.pageItems.length}${sec.id === 'book' ? '冊' : '本'}を表示` : `${sec.items.length}${sec.id === 'book' ? '冊' : '本'}`}</span></div></div>
+        {sec.pageCount > 1 && <Pager page={sec.page} pageCount={sec.pageCount} onChange={n => goPage(sec.id, n)} />}
+        {sec.items.length === 0 ? <p className="section-empty">条件に合う{sec.label}はありません</p> : renderItems(sec.pageItems, sec.start)}
+        {sec.pageCount > 1 && <Pager className="pager-bottom" page={sec.page} pageCount={sec.pageCount} onChange={n => goPage(sec.id, n)} />}
+      </section>) : filtered.length === 0 ? contentType === 'book' ? <Empty onAdd={() => openBook(emptyBook())} hasBooks={books.length > 0} /> : <div className="empty panel"><h2>{query || category !== 'all' ? '条件に合う項目がありません' : 'YouTubeと同期して、高評価動画を取り込みましょう'}</h2><p>動画の取得とAI解析は別々に実行できます。</p></div>  : renderItems(single.pageItems, single.start)}
+      {paged && <Pager className="pager-bottom" page={single.page} pageCount={single.pageCount} onChange={n => goPage(single.id, n)} />}
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {notices.length > 0 && <div className="notices" role="status">{notices.map(n => <p key={n.id} className={n.error ? 'error' : undefined}>{n.error ? <CloudAlert /> : <Check />}{n.text}<button type="button" aria-label="閉じる" onClick={() => setNotices(list => list.filter(x => x.id !== n.id))}><X /></button></p>)}</div>}
@@ -740,6 +758,10 @@ function BackupModal({ drive, onClose, onExport, onImport }: { drive: ReturnType
 function splitCsv(line: string) { const values: string[] = []; let value = '', quoted = false; for (let i = 0; i < line.length; i++) { const char = line[i]; if (char === '"' && line[i + 1] === '"') { value += '"'; i++ } else if (char === '"') quoted = !quoted; else if (char === ',' && !quoted) { values.push(value); value = '' } else value += char } values.push(value); return values }
 // 「表示名::URL」を | で区切る。以前の「種類::表示名::URL」形式も読み込める
 function parseCsvLinks(value: string): BookLink[] { return value.split('|').map(v => v.trim()).filter(Boolean).map((entry, i) => { const parts = entry.split('::'); const url = parts.at(-1) ?? ''; const label = parts.length > 1 ? parts.at(-2) ?? '' : ''; return { id: `${crypto.randomUUID()}-${i}`, label, url } }).filter(l => l.url) }
+
+/** 一覧の段（「すべて」では本・動画の2段、それ以外は1段）と、その段で表示中のページ */
+interface ListSection { id: string; label: string; items: Book[]; page: number; pageCount: number; start: number; pageItems: Book[] }
+const isVideoItem = (b: Book) => 'type' in b && b.type === 'youtube'
 
 /** 一覧のページ送り（前後ボタンとページ番号。幅に入りきらないときだけ途中を省略） */
 function Pager({ page, pageCount, onChange, className }: { page: number; pageCount: number; onChange: (page: number) => void; className?: string }) {

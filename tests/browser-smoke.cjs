@@ -17,7 +17,7 @@ async function main() {
   const errors = []; page.on('pageerror', e => errors.push(String(e)))
   await page.addInitScript(book => {
    if (!localStorage.getItem('test-initialized')) { localStorage.setItem('mybooks-library-v1', JSON.stringify([book])); localStorage.setItem('mybooks-semantic-search', '0'); localStorage.setItem('test-initialized', '1') }
-   window.google = { accounts: { oauth2: { initTokenClient(config) { return { requestAccessToken() { config.callback({ access_token: 'test-only-token', expires_in: 3600, scope: config.scope }) }, get callback() { return config.callback }, set callback(v) { config.callback = v }, set error_callback(v) { config.error_callback = v } } }, revoke() {} } } }
+   window.google = { accounts: { oauth2: { initTokenClient(config) { return { requestAccessToken() { if (config.include_granted_scopes !== false || config.scope.includes('drive.file') && config.scope.includes('youtube.readonly')) throw new Error('OAuth scopes must be isolated'); sessionStorage.setItem('test-token-scope', config.scope); config.callback({ access_token: config.scope.includes('youtube.readonly') ? 'test-youtube-token' : 'test-drive-token', expires_in: 3600, scope: config.scope }) }, get callback() { return config.callback }, set callback(v) { config.callback = v }, set error_callback(v) { config.error_callback = v } } }, revoke() {} } } }
   }, book)
   await page.route('https://accounts.google.com/gsi/client', r => r.fulfill({ body: '', contentType: 'application/javascript' }))
   await page.route('https://i.ytimg.com/**', r => r.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#5b21d2"/></svg>' }))
@@ -25,13 +25,13 @@ async function main() {
   const files = new Map(); let revision = 0
   const modified = () => new Date(Date.UTC(2026, 9, 7, 0, 0, ++revision)).toISOString()
   await page.route('https://www.googleapis.com/drive/**', r => {
-   const u = new URL(r.request().url()); const id = u.pathname.split('/').at(-1)
+   assert.equal(r.request().headers().authorization, 'Bearer test-drive-token'); const u = new URL(r.request().url()); const id = u.pathname.split('/').at(-1)
    if (id !== 'files') { const f = [...files.values()].find(v => v.id === id); return r.fulfill(f ? { json: u.searchParams.has('alt') ? f.data : { id: f.id, modifiedTime: f.modifiedTime, trashed: false, parents: ['12T2RtZHu_lpq8_zVeExmYHiAh_v7cKIW'] } } : { status: 404, json: {} }) }
    const name = u.searchParams.get('q')?.match(/name='([^']+)'/)?.[1]; const f = files.get(name)
    return r.fulfill({ json: { files: f ? [{ id: f.id, modifiedTime: f.modifiedTime }] : [] } })
   })
   await page.route('https://www.googleapis.com/upload/**', r => {
-   const req = r.request(), body = req.postData() || ''
+   assert.equal(r.request().headers().authorization, 'Bearer test-drive-token'); const req = r.request(), body = req.postData() || ''
    if (req.method() === 'POST') {
     const name = body.match(/"name":"([^"]+)"/)?.[1]
     const raw = body.match(/name="file"[^]*?\r\n\r\n([^]*?)\r\n--/)?.[1]
@@ -44,7 +44,7 @@ async function main() {
   })
   let youtubeCalls = 0, syncFailure = false
   await page.route('https://www.googleapis.com/youtube/v3/videos?*', r => {
-   youtubeCalls++
+   assert.equal(r.request().headers().authorization, 'Bearer test-youtube-token'); youtubeCalls++
    if (syncFailure) return r.fulfill({ status: 403, json: { error: { errors: [{ reason: 'quotaExceeded' }] } } })
    const next = new URL(r.request().url()).searchParams.has('pageToken')
    return r.fulfill({ json: { items: (next ? [ids[2]] : ids.slice(0, 2)).map(source), ...(next ? {} : { nextPageToken: 'next' }) } })
@@ -62,10 +62,15 @@ async function main() {
   let interestCalls = 0
   await page.route('**/api/library-interests', r => { interestCalls++; const b = r.request().postDataJSON(); assert.equal(b.books.total, 1); assert.equal(b.youtube.total, 3); return r.fulfill({ json: { analysis: { summary: 'AIと仕事に関心があります。', bookPattern: '本は概念を整理する傾向です。', videoPattern: '動画は技術への応用を選んでいます。', differences: ['本と動画では知識の取り入れ方に違いがあります。'], limitations: 'メタデータと少数のサンプルからの分析です。' } } }) })
   await page.goto(url)
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('test-token-scope')), null)
   await page.getByRole('button', { name: 'YouTube', exact: true }).click()
   await page.getByRole('button', { name: 'YouTubeと同期', exact: true }).click()
   await page.getByText(/新規：3件/).waitFor(); assert.equal(youtubeCalls, 2); assert.equal(analysisCalls, 0)
   assert.equal(await page.locator('.video-card').count(), 3)
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('mybooks-drive-token')), null, 'YouTube must not connect Drive')
+  await page.evaluate(async () => { const drive = await import('/src/drive.ts'); await drive.signIn() })
+  assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('mybooks-youtube-token')).token), 'test-youtube-token')
+  assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('mybooks-drive-token')).token), 'test-drive-token')
   await page.getByRole('button', { name: 'YouTubeと同期', exact: true }).click(); await page.getByText(/新規：0件/).waitFor()
   assert.equal(await page.locator('.video-card').count(), 3)
   syncFailure = true
@@ -99,13 +104,32 @@ async function main() {
   await page.locator('.backup-label').click(); const downloaded = page.waitForEvent('download'); await page.getByRole('button', { name: /バックアップを書き出す/ }).click(); const backup = JSON.parse(readFileSync(await (await downloaded).path(), 'utf8')); assert.equal(backup.version, 2); assert.equal(backup.videos.length, 3); assert.equal(backup.books.length, 2); assert.ok(backup.books.every(b => b.type === undefined)); await page.locator('input[type=file]').setInputFiles({ name: 'legacy.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ version: 1, books: [book] })) }); await page.waitForFunction(() => JSON.parse(localStorage.getItem('mybooks-library-v1')).length === 1, undefined, { timeout: 15_000 }); assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mybooks-youtube-v1')).length), 3); const invalidAlert = page.waitForEvent('dialog'); await page.locator('input[type=file]').setInputFiles({ name: 'invalid-videos.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ version: 2, books: [], videos: [{ videoId: 'bad' }] })) }); assert.match((await invalidAlert).message(), /形式/); assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mybooks-library-v1')).length), 1)
   const denied = await browser.newPage(); denied.setDefaultTimeout(15_000); await denied.route('**/api/**', r => r.fulfill({ status: 401, json: { error: 'テストでは未接続です' } })); await denied.addInitScript(() => { window.google = { accounts: { oauth2: { initTokenClient(c) { return { requestAccessToken() { c.callback({ access_token: 'test-only', scope: 'https://www.googleapis.com/auth/drive.file' }) }, set callback(v) { c.callback = v }, set error_callback(v) { c.error_callback = v } } } } } } }); await denied.route('https://accounts.google.com/gsi/client', r => r.fulfill({ body: '', contentType: 'application/javascript' })); await denied.route('**/api/auth', r => r.fulfill({ status: 501, json: { code: 'not_configured' } })); await denied.goto(url); await denied.getByRole('button', { name: 'YouTube', exact: true }).click(); await denied.getByRole('button', { name: 'YouTubeと同期', exact: true }).click(); await denied.getByText('必要な権限が許可されませんでした', { exact: true }).waitFor(); await denied.close()
   const codeFlow = await browser.newPage(); codeFlow.setDefaultTimeout(15_000)
-  await codeFlow.addInitScript(() => { window.google = { accounts: { oauth2: { initCodeClient(c) { return { requestCode() { sessionStorage.setItem('test-code-scope', c.scope); c.callback({ code: 'test-only-code' }) } } } } } } })
+  await codeFlow.addInitScript(() => {
+   window.google = { accounts: { oauth2: {
+    initCodeClient(c) { return { requestCode() { if (c.include_granted_scopes !== false) throw new Error('Combined grants'); sessionStorage.setItem('test-code-scope', c.scope); c.callback({ code: 'test-only-code' }) } } },
+    initTokenClient(c) { return { requestAccessToken() { if (c.scope !== 'https://www.googleapis.com/auth/youtube.readonly' || c.include_granted_scopes !== false) throw new Error('Combined YouTube scopes'); sessionStorage.setItem('test-youtube-scope', c.scope); c.callback({ access_token: 'isolated-youtube-token', expires_in: 3600, scope: c.scope }) }, set callback(v) { c.callback = v }, set error_callback(v) { c.error_callback = v } } }
+   } } }
+  })
   await codeFlow.route('https://accounts.google.com/gsi/client', r => r.fulfill({ body: '', contentType: 'application/javascript' }))
   await codeFlow.route('https://www.googleapis.com/**', r => r.fulfill({ json: { files: [] } }))
-  await codeFlow.route('https://www.googleapis.com/youtube/v3/videos?*', r => r.fulfill({ json: { items: [] } }))
+  await codeFlow.route('https://www.googleapis.com/youtube/v3/videos?*', r => { assert.equal(r.request().headers().authorization, 'Bearer isolated-youtube-token'); return r.fulfill({ json: { items: [] } }) })
   await codeFlow.route('**/api/**', r => r.fulfill({ status: 401, json: { error: '未接続' } }))
-  await codeFlow.route('**/api/auth', r => r.fulfill(r.request().postDataJSON().action === 'exchange' ? { json: { access_token: 'test-code-token', expires_in: 3600, scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/youtube.readonly' } } : { status: 401, json: { code: 'signed_out' } }))
-  await codeFlow.goto(url); await codeFlow.getByRole('button', { name: 'YouTube', exact: true }).click(); await codeFlow.getByRole('button', { name: 'YouTubeと同期', exact: true }).click(); await codeFlow.getByText(/高評価した動画がありませんでした/).waitFor(); assert.match(await codeFlow.evaluate(() => sessionStorage.getItem('test-code-scope')), /youtube.readonly/); await codeFlow.close()
+  let exchanges = 0
+  await codeFlow.route('**/api/auth', r => {
+   if (r.request().postDataJSON().action === 'exchange') { exchanges++; return r.fulfill({ json: { access_token: 'test-code-token', expires_in: 3600, scope: exchanges > 1 ? 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly' : 'https://www.googleapis.com/auth/drive.file' } }) }
+   return r.fulfill({ status: 401, json: { code: 'signed_out' } })
+  })
+  await codeFlow.goto(url)
+  await codeFlow.evaluate(async () => { const drive = await import('/src/drive.ts'); await drive.signIn() })
+  assert.equal(await codeFlow.evaluate(() => sessionStorage.getItem('test-code-scope')), 'https://www.googleapis.com/auth/drive.file')
+  assert.equal(await codeFlow.evaluate(() => sessionStorage.getItem('mybooks-youtube-token')), null)
+  await codeFlow.getByRole('button', { name: 'YouTube', exact: true }).click(); await codeFlow.getByRole('button', { name: 'YouTubeと同期', exact: true }).click(); await codeFlow.getByText(/高評価した動画がありませんでした/).waitFor()
+  assert.equal(exchanges, 1, 'YouTube must not exchange codes or overwrite the Drive cookie')
+  assert.equal(await codeFlow.evaluate(() => JSON.parse(sessionStorage.getItem('mybooks-drive-token')).token), 'test-code-token')
+  assert.equal(await codeFlow.evaluate(() => sessionStorage.getItem('test-youtube-scope')), 'https://www.googleapis.com/auth/youtube.readonly')
+  await codeFlow.evaluate(async () => { const drive = await import('/src/drive.ts'); await drive.signInForRead() })
+  assert.equal(await codeFlow.evaluate(() => sessionStorage.getItem('test-code-scope')), 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly')
+  await codeFlow.close()
   assert.deepEqual(errors, [])
   console.log('PASS: OAuth, paginated sync, deduplication, quota error preservation, explicit/selected/batch AI analysis, cost confirmation, stop/retry, details, mixed cards/list, semantic search, balanced recommendation, UMAP, interest cache/scopes, settings, separate Drive persistence, reload, mobile layout, OAuth denial, legacy book creation and backup compatibility')
  } finally { await browser?.close(); if (service) { try { process.kill(-service.pid, 'SIGTERM') } catch {} } }

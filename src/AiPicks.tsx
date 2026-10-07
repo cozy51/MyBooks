@@ -16,7 +16,7 @@ type State =
   | { status: 'error'; message: string; code: string }
 
 /** AI選書のモーダル。入力文から、登録済みの本の中で内容が合う本を選び、選定理由とともに表示する */
-export function AiPicksModal({ books, driveStatus, onConnect, onOpen, onClose }: { books: Book[]; driveStatus: SyncStatus; onConnect: () => void; onOpen: (b: Book) => void; onClose: () => void }) {
+export function AiPicksModal({ books, driveStatus, onConnect, onOpen, onClose, label = 'AI選書', indexItems = books }: { label?: string; indexItems?: Book[]; books: Book[]; driveStatus: SyncStatus; onConnect: () => void; onOpen: (b: Book) => void; onClose: () => void }) {
   const [query, setQuery] = useState(() => { try { return sessionStorage.getItem(QUERY_KEY) ?? '' } catch { return '' } })
   const [state, setState] = useState<State>({ status: 'input' })
   const abort = useRef<AbortController | null>(null)
@@ -38,7 +38,7 @@ export function AiPicksModal({ books, driveStatus, onConnect, onOpen, onClose }:
     abort.current = controller
     setState({ status: 'loading', stage: { stage: 'index', progress: null } })
     try {
-      const picks = await pickBooks(text, books, stage => { if (!controller.signal.aborted) setState({ status: 'loading', stage }) }, controller.signal)
+      const picks = await pickBooks(text, books, stage => { if (!controller.signal.aborted) setState({ status: 'loading', stage }) }, controller.signal, indexItems)
       if (!controller.signal.aborted) setState({ status: 'done', query: text, picks })
     } catch (e) {
       if (controller.signal.aborted) return
@@ -50,24 +50,24 @@ export function AiPicksModal({ books, driveStatus, onConnect, onOpen, onClose }:
 
   return <div className="modal-backdrop ai-picks-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
     <section className="modal ai-picks" role="dialog" aria-modal="true" aria-labelledby="ai-picks-title">
-      <div className="modal-head ai-picks-head"><div><p className="eyebrow">AI BOOK PICKS</p><h2 id="ai-picks-title"><Sparkles /> AI選書</h2></div><button type="button" className="icon-btn" onClick={onClose} aria-label="閉じる"><X /></button></div>
+      <div className="modal-head ai-picks-head"><div><p className="eyebrow">AI BOOK PICKS</p><h2 id="ai-picks-title"><Sparkles /> {label}</h2></div><button type="button" className="icon-btn" onClick={onClose} aria-label="閉じる"><X /></button></div>
 
       {state.status === 'done' ? <PickResults query={state.query} picks={state.picks} onOpen={onOpen} onBack={back} /> : <div className="ai-picks-body">
         <form className="ai-picks-form" onSubmit={e => { e.preventDefault(); void run() }}>
           <label htmlFor="ai-picks-query">今、何について知りたいですか？</label>
-          <p className="ai-picks-hint">知りたいこと・考えたいこと・困っていること・興味を、文章で自由に書いてください。登録されている{books.length}冊の中から、内容が合う本を選びます。</p>
+          <p className="ai-picks-hint">知りたいこと・考えたいこと・困っていること・興味を、文章で自由に書いてください。表示対象の{books.length}件の中から、内容が合う本・動画を選びます。</p>
           <textarea id="ai-picks-query" ref={inputRef} autoFocus value={query} maxLength={MAX_QUERY} rows={5} disabled={state.status === 'loading'}
             onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void run() } }}
             placeholder="例：データから原因と結果を正しく見極めたい。相関があるだけなのに、因果関係だと思い込んでしまうことが多い。" />
           <div className="ai-picks-examples"><span>例：</span>{EXAMPLES.map(text => <button key={text} type="button" disabled={state.status === 'loading'} onClick={() => { setQuery(text); inputRef.current?.focus() }}>{text}</button>)}</div>
           <div className="ai-picks-submit">
             <small>{query.length}/{MAX_QUERY}字・Ctrl+Enter でも選べます</small>
-            <button className="primary-btn ai-picks-run" disabled={state.status === 'loading' || !query.trim()}>{state.status === 'loading' ? <LoaderCircle className="spin" /> : <Sparkles />} {state.status === 'loading' ? '選んでいます…' : 'おすすめの本を選ぶ'}</button>
+            <button className="primary-btn ai-picks-run" disabled={state.status === 'loading' || !query.trim()}>{state.status === 'loading' ? <LoaderCircle className="spin" /> : <Sparkles />} {state.status === 'loading' ? '選んでいます…' : 'おすすめを選ぶ'}</button>
           </div>
         </form>
         {state.status === 'loading' && <p className="ai-picks-progress" role="status"><LoaderCircle className="spin" /> {stageText(state.stage)}</p>}
         {state.status === 'error' && <div className="ai-picks-error" role="alert"><p>{state.message}</p>{needsLogin && <button type="button" className="secondary-btn" onClick={onConnect}><Cloud /> Googleでログイン</button>}</div>}
-        <p className="ai-picks-note">選定理由は、MyBooksに保存されているタイトル・著者・分類・要約だけを根拠にAIが作成します。要約が登録されている本ほど、正確に選べます。</p>
+        <p className="ai-picks-note">選定理由は、MyBooksに保存されているタイトル・著者／チャンネル・分類・要約・概要欄・タグだけを根拠にAIが作成します。要約が登録されている本ほど、正確に選べます。</p>
       </div>}
     </section>
   </div>
@@ -87,12 +87,13 @@ function PickResults({ query, picks, onOpen, onBack }: { query: string; picks: A
     </div>
     {picks.length === 0 ? <div className="ai-picks-empty"><BookOpen /><p>入力内容に合う本が、登録されている本の中に見つかりませんでした。別の言葉で書き直すか、本の要約を登録してからお試しください。</p></div>
       : <ol className="ai-picks-list">{picks.map((pick, i) => <PickCard key={pick.book.id} rank={i + 1} pick={pick} onOpen={onOpen} />)}</ol>}
-    <p className="ai-picks-note">選定理由は、MyBooksに保存されているタイトル・著者・分類・要約だけを根拠にAIが作成しています。表紙やタイトルを押すと、本の詳細を開きます。</p>
+    <p className="ai-picks-note">選定理由は、MyBooksに保存されているタイトル・著者／チャンネル・分類・要約・概要欄・タグだけを根拠にAIが作成しています。表紙やタイトルを押すと、本の詳細を開きます。</p>
   </div>
 }
 
 function PickCard({ rank, pick, onOpen }: { rank: number; pick: AiPick; onOpen: (b: Book) => void }) {
   const { book } = pick
+  const isVideo = 'type' in book && book.type === 'youtube'
   const child = categories.find(c => c.id === book.categoryId)
   const summary = book.memo.trim()
   return <li className="pick-card">
@@ -103,17 +104,17 @@ function PickCard({ rank, pick, onOpen }: { rank: number; pick: AiPick; onOpen: 
     <div className="pick-body">
       <div className="pick-title">
         {child && <span className="pick-category">{child.name}</span>}
-        <h4><button type="button" onClick={() => onOpen(book)}>{book.title}</button></h4>
+        <small className="pick-category">{isVideo ? '▶ YouTube' : '📕 本'}</small><h4><button type="button" onClick={() => onOpen(book)}>{book.title}</button></h4>
         <p className={`author${book.author.trim() ? '' : ' missing'}`}>{book.author.trim() ? <><UserRound /><span>{book.author.trim()}</span></> : '著者未登録'}</p>
       </div>
-      <Relevance value={pick.relevance} />
+      <Relevance value={pick.relevance} /><span aria-label={`おすすめ度 ${Math.max(1, Math.round(pick.relevance / 20))}つ星`}>おすすめ度 {'★'.repeat(Math.max(1, Math.round(pick.relevance / 20)))}{'☆'.repeat(5 - Math.max(1, Math.round(pick.relevance / 20)))}</span>
       <section className="pick-section"><h5>選定理由</h5><p>{pick.reason}</p></section>
-      {pick.themes.length > 0 && <section className="pick-section"><h5>あなたの関心と、この本のテーマ</h5><ul className="pick-themes">{pick.themes.map((t, i) => <li key={i}><span className="interest">{t.interest}</span><span className="arrow" aria-label="に関連する">→</span><span className="theme">{t.theme}</span></li>)}</ul></section>}
-      {pick.benefits.length > 0 && <section className="pick-section"><h5>読むと得られそうなこと</h5><ul className="pick-benefits">{pick.benefits.map((b, i) => <li key={i}><Target />{b}</li>)}</ul></section>}
+      {pick.themes.length > 0 && <section className="pick-section"><h5>あなたの質問との関係</h5><ul className="pick-themes">{pick.themes.map((t, i) => <li key={i}><span className="interest">{t.interest}</span><span className="arrow" aria-label="に関連する">→</span><span className="theme">{t.theme}</span></li>)}</ul></section>}
+      {pick.benefits.length > 0 && <section className="pick-section"><h5>ここから得られること</h5><ul className="pick-benefits">{pick.benefits.map((b, i) => <li key={i}><Target />{b}</li>)}</ul></section>}
       <details className="pick-why">
-        <summary><Sparkles /> なぜこの本？<ChevronDown className="chevron" /></summary>
+        <summary><Sparkles /> なぜこの項目？<ChevronDown className="chevron" /></summary>
         <div className="pick-why-body">
-          <p>あなたが入力した「{pick.themes[0]?.interest || 'ご関心'}」に対して、この本の次のデータを根拠に選びました。</p>
+          <p>あなたが入力した「{pick.themes[0]?.interest || 'ご関心'}」に対して、この項目の次のデータを根拠に選びました。</p>
           {pick.evidence.length > 0 ? <><h6>要約の中の根拠</h6><ul className="pick-evidence">{pick.evidence.map((e, i) => <li key={i}><Quote />{e}</li>)}</ul></>
             : <p className="pick-warn">{summary ? 'AIの答えから、要約の原文と一致する根拠を確認できませんでした。選定理由は参考としてご覧ください。' : 'この本は要約が登録されていないため、タイトルと分類だけを根拠にしています。要約を登録すると、より正確に選べます。'}</p>}
           <dl className="pick-data">

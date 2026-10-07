@@ -33,7 +33,7 @@ export class PickError extends Error {
 }
 
 /** 入力文に合う本を選ぶ */
-export async function pickBooks(query: string, books: Book[], onStage: (s: PickStage) => void = () => {}, signal?: AbortSignal): Promise<AiPick[]> {
+export async function pickBooks(query: string, books: Book[], onStage: (s: PickStage) => void = () => {}, signal?: AbortSignal, indexItems: Book[] = books): Promise<AiPick[]> {
   const text = query.trim().slice(0, MAX_QUERY)
   if (!text) throw new PickError('知りたいことを入力してください。')
   const titled = books.filter(b => b.title.trim())
@@ -41,7 +41,7 @@ export async function pickBooks(query: string, books: Book[], onStage: (s: PickS
 
   // 1. 書籍側のベクトル（意味検索と共通）を最新にする。追加・編集された本だけ計算する
   onStage({ stage: 'index', progress: null })
-  const { index, error } = await updateSearchIndex(books, p => onStage({ stage: 'index', progress: p.done < p.total ? p : null }))
+  const { index, error } = await updateSearchIndex(indexItems, p => onStage({ stage: 'index', progress: p.done < p.total ? p : null }))
   signal?.throwIfAborted()
   if (!index.model) throw new PickError(error?.message || '意味検索のデータを準備できませんでした。', error?.code)
 
@@ -55,7 +55,8 @@ export async function pickBooks(query: string, books: Book[], onStage: (s: PickS
   } catch (e) { throw e instanceof EmbedError ? new PickError(e.message, e.code) : e }
   signal?.throwIfAborted()
   const scores = semanticScores(index, titled, vector)
-  const candidates = titled.filter(b => scores.has(b.id)).sort((a, b) => scores.get(b.id)! - scores.get(a.id)!).slice(0, CANDIDATES)
+  const ranked = titled.filter(b => scores.has(b.id)).sort((a, b) => scores.get(b.id)! - scores.get(a.id)!)
+  const candidates = balancedCandidates(ranked, CANDIDATES)
   if (!candidates.length) throw new PickError('意味検索のデータがある本がまだありません。しばらくしてからもう一度お試しください。')
 
   // 3. 候補の本のデータだけをAIに渡して選んでもらう
@@ -70,7 +71,7 @@ export async function pickBooks(query: string, books: Book[], onStage: (s: PickS
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({
         query: text,
-        books: candidates.map(b => ({ id: b.id, title: b.title.trim(), author: b.author.trim(), category: categoryName(b.categoryId), summary: b.memo.trim(), similarity: Math.round(scores.get(b.id)! * 1000) / 1000 })),
+        books: candidates.map(b => ({ id: b.id, title: b.title.trim(), author: b.author.trim(), category: categoryName(b.categoryId), type: 'type' in b && b.type === 'youtube' ? 'youtube' : 'book', summary: recommendationSummary(b), similarity: Math.round(scores.get(b.id)! * 1000) / 1000 })),
       }),
     })
   } catch (e) {
@@ -86,4 +87,19 @@ export async function pickBooks(query: string, books: Book[], onStage: (s: PickS
     const book = byId.get(p.id)
     return book ? [{ book, relevance: p.relevance, similarity: scores.get(book.id), reason: p.reason, themes: p.themes ?? [], benefits: p.benefits ?? [], evidence: p.evidence ?? [] }] : []
   })
+}
+
+/** Keep both media represented in the candidate pool without inventing relevance. */
+export function balancedCandidates(ranked: Book[], limit: number): Book[] {
+  const videos = ranked.filter(b => 'type' in b && b.type === 'youtube')
+  const books = ranked.filter(b => !('type' in b) || b.type !== 'youtube')
+  if (!videos.length || !books.length) return ranked.slice(0, limit)
+  const half = Math.floor(limit / 2)
+  const selected = new Set([...videos.slice(0, half), ...books.slice(0, half)])
+  for (const item of ranked) { if (selected.size >= limit) break; selected.add(item) }
+  return ranked.filter(b => selected.has(b))
+}
+export function recommendationSummary(book: Book): string {
+  const item = book as Book & { description?: string; tags?: string[] }
+  return [book.memo.trim(), item.description ? `概要欄: ${item.description.slice(0, 2500)}` : '', item.tags?.length ? `タグ: ${item.tags.join('・')}` : ''].filter(Boolean).join('\n')
 }

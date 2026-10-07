@@ -41,3 +41,30 @@
 .hub-pick-title{display:flex;align-items:flex-start;gap:7px}.hub-pick-title strong{min-width:0}.hub-pick-title .copy-mini{margin-top:2px}
 .cover-editor>img{background:#eeebef;padding:12px;border-radius:10px}
 @media(max-width:650px){.cover-editor>img{padding:7px;border-radius:8px}}
+
+/* Library media extensions keep the existing purple palette and cards. */
+.library-tabs { display:flex; gap:6px; margin:20px 0; }
+.library-tabs button { padding:9px 22px; border:1px solid #ded5eb; border-radius:24px; background:white; color:#625371; }
+.library-tabs button.active { background:#5b21d2; color:white; border-color:#5b21d2; }
+.youtube-tools { display:flex; flex-wrap:wrap; align-items:center; gap:14px; padding:16px; margin-bottom:16px; }
+.video-thumbnail { aspect-ratio:16/9; position:relative; background:#eee8f7; display:grid; place-items:center; overflow:hidden; }
+.video-thumbnail img { width:100%; height:100%; object-fit:cover; }
+.video-type { position:absolute; bottom:8px; left:8px; display:flex; align-items:center; gap:5px; border-radius:6px; background:#5b21d2; color:white; padding:4px 8px; font-size:11px; }
+.video-check { position:absolute; top:10px; right:10px; background:white; padding:6px; border-radius:6px; }
+.video-excerpt { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; font-size:12px; line-height:1.7; color:#71647e; }
+.video-actions { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:12px 0; font-size:12px; }
+.video-actions a { display:flex; gap:4px; align-items:center; color:#5b21d2; }
+.video-detail { padding:24px; line-height:1.8; overflow-wrap:anywhere; }
+.video-detail-image { width:100%; max-height:300px; object-fit:contain; border-radius:12px; }
+.video-detail h4 { margin:20px 0 6px; }
+.video-detail dl { display:grid; grid-template-columns:130px 1fr; gap:8px; }
+.video-detail dd { margin:0; }
+.video-summary { white-space:pre-wrap; }
+.video-detail small { color:#776884; }
+.interest-row { display:grid; grid-template-columns:minmax(130px,1fr) minmax(60px,120px) 50px 40px; gap:8px; align-items:center; margin:10px 0; font-size:12px; }
+.interest-row progress { width:100%; accent-color:#5b21d2; }
+@media (max-width:600px) { .video-detail { padding:16px; } .video-detail dl { grid-template-columns:100px 1fr; } .interest-row { grid-template-columns:1fr 65px 45px; } .interest-row small { display:none; } .library-tabs button { padding:8px 16px; } }
+.toolbar { display:flex; flex-wrap:wrap; }
+.toolbar .search { flex:1 1 320px; min-width:0; }
+.toolbar select { flex:1 1 150px; max-width:260px; }
+.toolbar > button { flex:0 0 auto; }

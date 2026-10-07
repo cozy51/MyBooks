@@ -225,3 +225,9 @@ Driveに保存するには、Google CloudでOAuthクライアントIDを作成�
 | `npm run build` | 型検査と本番ビルド |
 | `npm run lint` | ESLintによる静的検査 |
 | `npm run preview` | ビルド結果をローカル確認 |
+
+## YouTube高評価動画と知識ライブラリ
+
+本とYouTubeを「すべて / 本 / YouTube」で切り替え、意味検索・推薦・マップ・興味分析を横断利用できます。Google OAuthで本人の高評価動画を取り込み、AI解析は単体・選択・未解析の一括から明示的に開始します。
+
+設定手順、解析範囲、料金対策、保存の互換性、テストについては [YouTube連携の説明](docs/youtube-library.md) を参照してください。

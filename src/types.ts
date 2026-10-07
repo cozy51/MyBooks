@@ -15,3 +15,40 @@ export interface Book {
   links: BookLink[]
   updatedAt: string
 }
+
+export type LibraryItemType = 'book' | 'youtube'
+export interface YouTubeVideo {
+  id: string
+  type: 'youtube'
+  videoId: string
+  title: string
+  channelTitle: string
+  channelId?: string
+  description?: string
+  thumbnailUrl?: string
+  videoUrl: string
+  publishedAt?: string
+  duration?: string
+  summary?: string
+  keyPoints?: string[]
+  category?: string
+  subCategory?: string
+  tags?: string[]
+  concreteAbstractScore?: number
+  technicalSocialScore?: number
+  recommendedFor?: string
+  aiComment?: string
+  embeddingText?: string
+  /** Future optional input; captions are never required or scraped. */
+  transcript?: string
+  analyzedAt?: string
+  createdAt: string
+  updatedAt: string
+}
+/** Read-only adapter for existing search, recommendations and UMAP. Never persist as Book. */
+export interface LibraryItem extends Book {
+  type: LibraryItemType
+  tags?: string[]
+  description?: string
+  embeddingText?: string
+}

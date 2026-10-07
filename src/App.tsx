@@ -3,7 +3,7 @@ import { BookOpen, Check, ChevronLeft, ChevronRight, CircleAlert, CircleStop, Sc
 import { COVER_FOLDER_ID, COVER_FOLDER_URL, driveFileId, driveFileUrl, normalizeCover } from './cover'
 import { categories, sampleBooks, statusClass } from './data'
 import { CoverImage, type Zoom } from './CoverImage'
-import { DATA_FOLDER_URL, DRIVE_API_KEY, DRIVE_CLIENT_ID, DRIVE_FILE_NAME, pickImage, readClipboardImage, uploadCoverImage } from './drive'
+import { DATA_FOLDER_URL, DRIVE_API_KEY, DRIVE_CLIENT_ID, DRIVE_FILE_NAME, pickImage, readClipboardImage, storedToken as storedGoogleToken, storedYouTubeToken, uploadCoverImage } from './drive'
 import { useDriveSync, type SyncStatus } from './useDriveSync'
 import { CardLinks, LinkEditor } from './LinkEditor'
 import { SameAuthorBooks, SimilarBooks } from './RelatedBooks'
@@ -16,6 +16,11 @@ import { scanFileName } from './scanCheck'
 import { rankBooks, wantsSemantic } from './semanticSearch'
 import { useSemanticSearch } from './useSemanticSearch'
 import { AiPicksModal } from './AiPicks'
+import { bookItem, videoItem, validateVideos } from './library'
+import { InterestAnalysis } from './InterestAnalysis'
+import { useVideoAnalysis } from './useVideoAnalysis'
+import { useVideoLibrary } from './useVideoLibrary'
+import { VideoCard, VideoModal } from './YouTubeLibrary'
 import type { Book, BookLink, ReadingStatus } from './types'
 
 // 分類マップ（UMAPなど）は「マップ」を開いたときだけ読み込む
@@ -92,13 +97,29 @@ interface SearchScore { score: number; semantic?: number; keyword: number }
 
 function App() {
   const [books, setBooks] = useState<Book[]>(loadBooks)
+  const videoLibrary = useVideoLibrary()
+  const analysis = useVideoAnalysis(videoLibrary.ref, videoLibrary.update)
+  const [contentType, setContentType] = useState<'book' | 'youtube' | 'all'>('book')
+  const [selectedVideos, setSelectedVideos] = useState<Set<string>>(new Set())
+  const [editingVideo, setEditingVideo] = useState<string | null>(null)
+  const [interestsOpen, setInterestsOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => {
+    if (!settingsOpen) return
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') setSettingsOpen(false) }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [settingsOpen])
+  const libraryItems = useMemo(() => [...books.map(bookItem), ...videoLibrary.videos.map(videoItem)], [books, videoLibrary.videos])
+  const displayedItems = useMemo(() => libraryItems.filter(i => contentType === 'all' || i.type === contentType), [libraryItems, contentType])
+  const openItem = (item: Book) => { if ('type' in item && item.type === 'youtube') setEditingVideo(item.id); else openBook(item) }
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('all')
   const [status, setStatus] = useState('all')
   const [view, setView] = useState<'cards' | 'table' | 'map'>('cards')
   const [editing, setEditing] = useState<Book | null>(null)
   const [modalTab, setModalTab] = useState<ModalTab>('edit')
-  const openBook = (book: Book | null) => { setModalTab('edit'); setEditing(book) }
+  const openBook = (book: Book | null) => { setModalTab('edit'); setEditing(book ? books.find(b => b.id === book.id) ?? book : null) }
   const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null)
   const [backupOpen, setBackupOpen] = useState(false)
   const [aiPicksOpen, setAiPicksOpen] = useState(false)
@@ -109,8 +130,8 @@ function App() {
   // 意味検索（オン・オフと、開発確認用の関連度表示はこのブラウザに覚える。?debug を付けて開いても関連度を表示）
   const [semanticOn, setSemanticOn] = useState(() => readFlag(SEMANTIC_KEY, true))
   const [debug, setDebug] = useState(() => readFlag(DEBUG_KEY, false) || new URLSearchParams(location.search).has('debug'))
-  const semantic = useSemanticSearch(books, query, semanticOn, drive.status)
-  const saveBooks = (next: Book[]) => { storeBooks(next); drive.markDirty() }
+  const semantic = useSemanticSearch(libraryItems, query, semanticOn, drive.status, videoLibrary.videos.length > 0)
+  const saveBooks = (next: Book[]) => { storeBooks(next); drive.markDirty(withCoverIds(next)) }
   // 画面下の短いお知らせ（数秒で消える）
   const [notices, setNotices] = useState<{ id: number; text: string; error?: boolean }[]>([])
   const notify = (text: string, error = false) => {
@@ -226,19 +247,19 @@ function App() {
   // 分類・読書状況で絞り込んだうえで、キーワード検索（従来どおりの部分一致）または意味検索を組み合わせたハイブリッド検索で並べる
   const semanticResult = semantic.state.status === 'ready' && semantic.state.query === query.trim() ? semantic.state.scores : null
   const { filtered, scores } = useMemo(() => {
-    const candidates = books.filter(book => {
+    const candidates = displayedItems.filter(book => {
       const cat = categories.find(c => c.id === book.categoryId)
-      return (category === 'all' || book.categoryId === category || cat?.parent === category) && (status === 'all' || book.status === status)
+      return (category === 'all' || book.categoryId === category || cat?.parent === category) && (status === 'all' || book.type === 'book' && book.status === status)
     }).map(book => {
       const { child, parent } = categoryPath(book.categoryId)
-      return { book, haystack: `${book.title} ${book.author} ${book.memo} ${child?.name} ${parent?.name} ${book.baseMonth}` }
+      return { book, haystack: `${book.title} ${book.author} ${book.memo} ${child?.name} ${parent?.name} ${book.baseMonth} ${book.description || ''} ${book.tags?.join(' ') || ''}` }
     })
     if (!semanticResult) return { filtered: candidates.filter(c => c.haystack.toLowerCase().includes(query.toLowerCase())).map(c => c.book), scores: null }
     const ranked = rankBooks(candidates, query, semanticResult)
     return { filtered: ranked.map(r => r.book), scores: new Map<string, SearchScore>(ranked.map(r => [r.book.id, r])) }
-  }, [books, query, category, status, semanticResult])
+  }, [displayedItems, query, category, status, semanticResult])
   // 絞り込み条件が変わったら1ページ目に戻す（編集・追加では今のページのまま）
-  const filterKey = `${query}\n${category}\n${status}`
+  const filterKey = `${contentType}\n${query}\n${category}\n${status}`
   // 表示中のページは再読み込みしても戻るように覚えておく（絞り込み条件ごと）
   const [paging, setPaging] = useState(() => {
     try {
@@ -263,7 +284,8 @@ function App() {
   const stepBook = (b: Book) => { const i = filtered.findIndex(x => x.id === b.id); if (i >= 0 && view !== 'map') setPaging({ key: filterKey, page: Math.floor(i / PAGE_SIZE) + 1 }) }
 
   const exportJson = () => {
-    const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), books }, null, 2)], { type: 'application/json' })
+    if (videoLibrary.storageError) { alert('動画データを読み込めないため、完全なバックアップを書き出せません。元の動画データを復元してから再試行してください。'); return }
+    const blob = new Blob([JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), books, videos: videoLibrary.videos }, null, 2)], { type: 'application/json' })
     const anchor = document.createElement('a'); anchor.href = URL.createObjectURL(blob); const d = new Date(); anchor.download = `Backup_MyBooks-library_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.json`; anchor.click(); URL.revokeObjectURL(anchor.href)
   }
   const importFile = (file?: File) => {
@@ -273,7 +295,7 @@ function App() {
       try {
         if (file.name.endsWith('.json')) {
           const parsed = JSON.parse(String(reader.result)); const next = Array.isArray(parsed) ? parsed : parsed.books
-          if (!Array.isArray(next)) throw new Error(); saveBooks(next); setBackupOpen(false)
+          if (!Array.isArray(next)) throw new Error(); const videos = parsed.videos === undefined ? null : validateVideos(parsed.videos); saveBooks(next); if (videos) videoLibrary.save(videos); setBackupOpen(false)
         } else {
           const lines = String(reader.result).replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean)
           const headers = splitCsv(lines.shift() || '')
@@ -290,36 +312,43 @@ function App() {
   return <div className="app-shell">
     <header className="topbar">
       <button className="brand" onClick={() => { setQuery(''); setCategory('all'); setStatus('all') }}><img className="brandmark" src="/favicon.svg" alt="" /><span>MyBooks<small>わたしの本棚</small></span></button>
-      <div className="header-actions"><button className={`ghost-btn backup-label sync-${drive.status}`} onClick={() => setBackupOpen(true)} title={syncLabel[drive.status]}><SyncIcon status={drive.status} /><span>{syncLabel[drive.status]}</span></button><button className="primary-btn" onClick={() => openBook(emptyBook())}><Plus /> 本を追加</button><button className="avatar" aria-label="設定"><Settings /></button></div>
+      <div className="header-actions"><button className={`ghost-btn backup-label sync-${drive.status}`} onClick={() => setBackupOpen(true)} title={syncLabel[drive.status]}><SyncIcon status={drive.status} /><span>{syncLabel[drive.status]}</span></button><button className="primary-btn" onClick={() => openBook(emptyBook())}><Plus /> 本を追加</button><button className="avatar" aria-label="設定" onClick={() => setSettingsOpen(true)}><Settings /></button></div>
     </header>
 
     <main>
       <DriveAlert drive={drive} onDetails={() => setBackupOpen(true)} />
-      <section className="welcome"><div><p className="eyebrow">MY PERSONAL LIBRARY</p><h1>本棚を、もっと身近に。</h1><p>{books.length}冊の本と、学びの記録をひとつの場所で管理しています。</p></div><div className="stat"><span>読書中</span><strong>{books.filter(b => b.status === '読書中').length}</strong><BookOpen /></div></section>
+      {videoLibrary.storageError && <p className="panel video-detail" role="alert">{videoLibrary.storageError}</p>}
+      <section className="welcome"><div><p className="eyebrow">MY PERSONAL LIBRARY</p><h1>本棚を、もっと身近に。</h1><p>{videoLibrary.videos.length ? `${books.length}冊の本と${videoLibrary.videos.length}本の動画を、ひとつの知識ライブラリで管理しています。` : `${books.length}冊の本と、学びの記録をひとつの場所で管理しています。`}</p></div><div className="stat"><span>読書中</span><strong>{books.filter(b => b.status === '読書中').length}</strong><BookOpen /></div></section>
 
+      <div className="library-tabs" role="group" aria-label="コンテンツの種類">{(['all', 'book', 'youtube'] as const).map(t => <button key={t} className={contentType === t ? 'active' : ''} aria-pressed={contentType === t} onClick={() => { setContentType(t); setStatus('all') }}>{t === 'all' ? 'すべて' : t === 'book' ? '本' : 'YouTube'}</button>)}</div>
+      {contentType !== 'book' && <section className="youtube-tools panel"><button className="primary-btn" disabled={videoLibrary.syncing} onClick={() => void videoLibrary.importLiked()}><RefreshCw />{videoLibrary.syncing ? '同期中…' : 'YouTubeと同期'}</button><button className="secondary-btn" disabled={analysis.pending.size > 0 || !videoLibrary.videos.some(v => !v.analyzedAt)} onClick={() => void analysis.run(videoLibrary.videos)}>未解析動画を一括解析</button><button className="secondary-btn" disabled={analysis.pending.size > 0 || !selectedVideos.size} onClick={() => void analysis.run(videoLibrary.videos.filter(v => selectedVideos.has(v.id)))}>選択動画のみ解析（{selectedVideos.size}）</button>{analysis.pending.size > 0 && <button className="secondary-btn" onClick={analysis.cancel}>解析を中止</button>}<span role="status">{videoLibrary.message}</span><span role="status">{analysis.message}</span>{Object.keys(analysis.failures).length > 0 && <details><summary>解析エラー（{Object.keys(analysis.failures).length}件）</summary>{Object.entries(analysis.failures).map(([id, error]) => <p key={id}>{videoLibrary.videos.find(v => v.id === id)?.title}：{error}</p>)}</details>}</section>}
       <section className="toolbar panel">
-        <label className="search"><Search /><input value={query} onChange={e => setQuery(e.target.value)} placeholder={semanticOn ? 'タイトル、著者、キーワード、文章から意味検索' : 'タイトル、著者、分類、要約、基準月（YYYY-MM）から検索'} />{query && <button type="button" onClick={() => setQuery('')} aria-label="検索語を消す"><X /></button>}<button type="button" className={`semantic-toggle${semanticOn ? ' active' : ''}`} aria-pressed={semanticOn} onClick={e => { e.preventDefault(); setSemanticOn(!semanticOn); writeFlag(SEMANTIC_KEY, !semanticOn) }} title={semanticOn ? '意味検索：オン（押すとキーワード検索だけにします）' : '意味検索：オフ（押すと意味の近さでも検索します）'}><Sparkles /><span>意味検索</span></button></label>
-        <button type="button" className="ai-pick-btn" onClick={() => setAiPicksOpen(true)} title="AI選書：知りたいこと・困っていることを文章で入力すると、登録されている本の中から内容が合う本を選びます"><Sparkles /> AI選書</button>
+        <label className="search"><Search /><input value={query} onChange={e => setQuery(e.target.value)} placeholder={contentType === 'book' ? semanticOn ? 'タイトル、著者、キーワード、文章から意味検索' : 'タイトル、著者、分類、要約、基準月（YYYY-MM）から検索' : 'タイトル、チャンネル、概要、要約、タグ、文章から検索'} />{query && <button type="button" onClick={() => setQuery('')} aria-label="検索語を消す"><X /></button>}<button type="button" className={`semantic-toggle${semanticOn ? ' active' : ''}`} aria-pressed={semanticOn} onClick={e => { e.preventDefault(); setSemanticOn(!semanticOn); writeFlag(SEMANTIC_KEY, !semanticOn) }} title={semanticOn ? '意味検索：オン（押すとキーワード検索だけにします）' : '意味検索：オフ（押すと意味の近さでも検索します）'}><Sparkles /><span>意味検索</span></button></label>
+        <button type="button" className="ai-pick-btn" onClick={() => setAiPicksOpen(true)} title="知りたいことを入力すると、表示対象の本・動画から理由とともに推薦します"><Sparkles /> {contentType === 'all' ? 'AIセレクト' : contentType === 'youtube' ? 'AI選動画' : 'AI選書'}</button>
+        <button type="button" className="secondary-btn" onClick={() => setInterestsOpen(true)}><Sparkles /> 興味分析</button>
         <select value={category} onChange={e => setCategory(e.target.value)} aria-label="分類で絞り込み"><option value="all">すべての分類</option>{categories.map(c => <option key={c.id} value={c.id}>{c.parent ? '　└ ' : ''}{c.name}</option>)}</select>
-        <select value={status} onChange={e => setStatus(e.target.value)} aria-label="読書状況で絞り込み"><option value="all">すべての読書状況</option><option>未読</option><option>読書中</option><option>読了</option></select>
+        <select value={status} onChange={e => setStatus(e.target.value)} aria-label="読書状況で絞り込み" disabled={contentType === 'youtube'}><option value="all">すべての読書状況</option><option>未読</option><option>読書中</option><option>読了</option></select>
       </section>
       {semanticOn && query.trim() && <SemanticStatus semantic={semantic} query={query} ranked={Boolean(scores)} driveStatus={drive.status} debug={debug} onDebug={v => { setDebug(v); writeFlag(DEBUG_KEY, v) }} onConnect={() => void drive.connect()} />}
 
-      <div className="content-heading" ref={headingRef}><div><h2>{scores ? '意味の近い順' : 'すべての本'}</h2><span>{paged ? `${filtered.length}冊中 ${pageStart + 1}〜${pageStart + pageBooks.length}冊を表示` : `${filtered.length}冊を表示`}</span></div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}><MapIcon /> マップ</button></div></div>
+      <div className="content-heading" ref={headingRef}><div><h2>{scores ? '意味の近い順' : contentType === 'youtube' ? 'すべての動画' : contentType === 'all' ? 'すべてのライブラリ' : 'すべての本'}</h2><span>{paged ? `${filtered.length}${contentType === 'book' ? '冊の本' : contentType === 'youtube' ? '本の動画' : '件のライブラリ'}のうち ${pageStart + 1}〜${pageStart + pageBooks.length}${contentType === 'book' ? '冊' : contentType === 'youtube' ? '本' : '件'}を表示` : `${filtered.length}${contentType === 'book' ? '冊の本' : contentType === 'youtube' ? '本の動画' : '件のライブラリ'}を表示`}</span></div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}><MapIcon /> マップ</button></div></div>
 
       {paged && <Pager page={page} pageCount={pageCount} onChange={goPage} />}
-      {view === 'map' && books.length > 0 ? <Suspense fallback={<div className="book-map panel map-loading"><LoaderCircle className="spin" /> マップを準備しています…</div>}>
-        <BookMap books={books} visibleIds={filteredIds} category={category} onCategory={setCategory} onSelect={openBook} driveStatus={drive.status} onConnect={() => void drive.connect()} />
-      </Suspense> : filtered.length === 0 ? <Empty onAdd={() => openBook(emptyBook())} hasBooks={books.length > 0} /> : view === 'cards' ?
-        <div className="book-grid">{pageBooks.map((book, i) => <BookCard key={book.id} no={pageStart + i + 1} book={book} score={debug ? scores?.get(book.id) : undefined} summary={summaryJobs.get(book.id)} issue={summaryIssues[book.id]} onCancelSummary={cancelSummary} onAutofill={startCoverAndSummary} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
-        <BookTable books={pageBooks} startNo={pageStart + 1} scores={debug ? scores : null} onSelect={openBook} />}
+      {view === 'map' && displayedItems.length > 0 ? <Suspense fallback={<div className="book-map panel map-loading"><LoaderCircle className="spin" /> マップを準備しています…</div>}>
+        <BookMap books={libraryItems} visibleIds={filteredIds} category={category} onCategory={setCategory} onSelect={openItem} driveStatus={drive.status} onConnect={() => void drive.connect()} />
+      </Suspense> : filtered.length === 0 ? contentType === 'book' ? <Empty onAdd={() => openBook(emptyBook())} hasBooks={books.length > 0} /> : <div className="empty panel"><h2>{query || category !== 'all' ? '条件に合う項目がありません' : 'YouTubeと同期して、高評価動画を取り込みましょう'}</h2><p>動画の取得とAI解析は別々に実行できます。</p></div> : view === 'cards' ?
+        <div className="book-grid">{pageBooks.map((book, i) => 'type' in book && book.type === 'youtube' ? <VideoCard key={book.id} busy={analysis.pending.has(book.id)} onAnalyze={() => void analysis.run(videoLibrary.videos.filter(v => v.id === book.id))} video={videoLibrary.videos.find(v => v.id === book.id)!} onOpen={() => setEditingVideo(book.id)} selected={selectedVideos.has(book.id)} onSelect={() => setSelectedVideos(s => { const next = new Set(s); if (next.has(book.id)) next.delete(book.id); else next.add(book.id); return next })} /> : <BookCard key={book.id} no={pageStart + i + 1} book={books.find(b => b.id === book.id) ?? book} score={debug ? scores?.get(book.id) : undefined} summary={summaryJobs.get(book.id)} issue={summaryIssues[book.id]} onCancelSummary={cancelSummary} onAutofill={startCoverAndSummary} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
+        <BookTable books={pageBooks} startNo={pageStart + 1} scores={debug ? scores : null} onSelect={openItem} />}
       {paged && <Pager className="pager-bottom" page={page} pageCount={pageCount} onChange={goPage} />}
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {notices.length > 0 && <div className="notices" role="status">{notices.map(n => <p key={n.id} className={n.error ? 'error' : undefined}>{n.error ? <CloudAlert /> : <Check />}{n.text}<button type="button" aria-label="閉じる" onClick={() => setNotices(list => list.filter(x => x.id !== n.id))}><X /></button></p>)}</div>}
+    {editingVideo && videoLibrary.videos.some(v => v.id === editingVideo) && <VideoModal busy={analysis.pending.has(editingVideo)} onAnalyze={() => void analysis.run(videoLibrary.videos.filter(v => v.id === editingVideo))} video={videoLibrary.videos.find(v => v.id === editingVideo)!} onClose={() => setEditingVideo(null)} />}
+    {interestsOpen && <InterestAnalysis items={libraryItems} videos={videoLibrary.videos} onClose={() => setInterestsOpen(false)} />}
+    {settingsOpen && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-label="設定"><div className="modal-head"><h2>設定</h2><button className="icon-btn" aria-label="閉じる" onClick={() => setSettingsOpen(false)}><X /></button></div><div className="video-detail"><h3>YouTube連携</h3><p>Googleアカウント：{!DRIVE_CLIENT_ID ? '未設定' : storedGoogleToken() ? '接続済み' : '未接続'}</p><p>YouTubeの読み取り権限：{storedYouTubeToken() ? '許可済み' : '同期時に許可'}</p><p>高評価動画：{videoLibrary.videos.length}件</p><p>最終同期：{videoLibrary.lastSync ? new Date(videoLibrary.lastSync).toLocaleString('ja-JP') : '未同期'}</p><button className="primary-btn" disabled={videoLibrary.syncing} onClick={() => void videoLibrary.importLiked()}>今すぐ同期</button><p role="status">{videoLibrary.message}</p><p>AI解析済み：{videoLibrary.videos.filter(v => v.analyzedAt).length} / {videoLibrary.videos.length}</p><button className="secondary-btn" disabled={analysis.pending.size > 0} onClick={() => void analysis.run(videoLibrary.videos)}>未解析をAI解析</button><p role="status">{analysis.message}</p><p>動画のDrive保存：{syncLabel[videoLibrary.sync.status]}</p>{videoLibrary.sync.message && <p role="alert">{videoLibrary.sync.message}</p>}<button className="secondary-btn" onClick={() => void videoLibrary.sync.syncNow()}>動画をDriveと同期</button>{videoLibrary.sync.status === 'needsFolder' && <button className="secondary-btn" onClick={() => void videoLibrary.sync.grantFolder()}>保存先フォルダを許可</button>}<p>Google CloudでYouTube Data API v3を有効にし、OAuth同意画面にYouTubeの読み取り専用権限を追加してください。APIキーだけでは高評価動画を取得できません。</p></div></section></div>}
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
-    {aiPicksOpen && <AiPicksModal books={books} driveStatus={drive.status} onConnect={() => void drive.connect()} onOpen={openBook} onClose={() => setAiPicksOpen(false)} />}
-    {editing && <BookModal key={editing.id} book={editing} books={books} summaryJob={summaryJobs.get(editing.id)} summaryIssue={summaryIssues[editing.id]} onCancelSummary={() => cancelSummary(editing.id)} onSummarize={startSummary} onSummaryApplied={() => dropJob(editing.id)} tab={modalTab} onTab={setModalTab} onOpen={openBook} nav={bookNav} onStep={stepBook} keysBlocked={Boolean(zoomed)} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const prev = books.find(b => b.id === book.id); if (summaryIssues[book.id]?.kind === 'mismatch' && (scanLink(prev?.links ?? []) !== scanLink(book.links) || prev?.title !== book.title)) setIssue(book.id, null); const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); if (open) openBook(open); else setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
+    {aiPicksOpen && <AiPicksModal label={contentType === 'all' ? 'AIセレクト' : contentType === 'youtube' ? 'AI選動画' : 'AI選書'} books={displayedItems} indexItems={libraryItems} driveStatus={drive.status} onConnect={() => void drive.connect()} onOpen={openItem} onClose={() => setAiPicksOpen(false)} />}
+    {editing && <BookModal indexItems={libraryItems} key={editing.id} book={editing} books={books} summaryJob={summaryJobs.get(editing.id)} summaryIssue={summaryIssues[editing.id]} onCancelSummary={() => cancelSummary(editing.id)} onSummarize={startSummary} onSummaryApplied={() => dropJob(editing.id)} tab={modalTab} onTab={setModalTab} onOpen={openBook} nav={bookNav} onStep={stepBook} keysBlocked={Boolean(zoomed)} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const prev = books.find(b => b.id === book.id); if (summaryIssues[book.id]?.kind === 'mismatch' && (scanLink(prev?.links ?? []) !== scanLink(book.links) || prev?.title !== book.title)) setIssue(book.id, null); const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); if (open) openBook(open); else setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>
@@ -331,10 +360,10 @@ function SemanticStatus({ semantic, query, ranked, driveStatus, debug, onDebug, 
   const needsLogin = driveStatus === 'signedOut' || driveStatus === 'needsFolder' || state.status === 'error' && state.code === 'unauthorized' || indexError?.code === 'unauthorized'
   let text: React.ReactNode, error = false
   if (!wantsSemantic(query)) text = '1文字や基準月（YYYY-MM）は、キーワードだけで検索しています。'
-  else if (ranked) text = <>意味の近い順に表示しています（タイトル・著者などが一致した本は少し上位に）。{progress && ` 意味検索の準備中（${progress.done}/${progress.total}冊）…`}</>
-  else if (state.status === 'searching') text = <><LoaderCircle className="spin" /> 意味の近い本を探しています…</>
+  else if (ranked) text = <>意味の近い順に表示しています（タイトル・著者／チャンネルなどが一致した項目は少し上位に）。{progress && ` 意味検索の準備中（${progress.done}/${progress.total}冊）…`}</>
+  else if (state.status === 'searching') text = <><LoaderCircle className="spin" /> 意味の近い項目を探しています…</>
   else if (state.status === 'error') { text = `意味検索ができませんでした：${state.message}（キーワードで検索しています）`; error = true }
-  else if (progress) text = <><LoaderCircle className="spin" /> 意味検索の準備中：本の内容をベクトル化しています（{progress.done}/{progress.total}冊）。それまではキーワードで検索しています。</>
+  else if (progress) text = <><LoaderCircle className="spin" /> 意味検索の準備中：本・動画の内容をベクトル化しています（{progress.done}/{progress.total}冊）。それまではキーワードで検索しています。</>
   else if (!hasIndex && indexError) { text = `意味検索の準備ができませんでした：${indexError.message}（キーワードで検索しています）`; error = true }
   else if (!hasIndex && needsLogin) text = '意味検索を使うには、Google Driveに接続（ログイン）してください。それまではキーワードで検索しています。'
   else text = 'キーワードで検索しています。'
@@ -386,7 +415,7 @@ function CopySummaryButton({ text, className }: { text: string; className?: stri
   return <button type="button" className={`copy-summary${className ? ` ${className}` : ''}${copied ? ' copied' : ''}`} onClick={copy} onKeyDown={e => e.stopPropagation()} title={copied ? 'コピーしました' : '要約をコピー'} aria-label="要約をコピー">{copied ? <Check /> : <Copy />}{copied ? 'コピーしました' : '要約コピー'}</button>
 }
 
-function BookTable({ books, startNo, scores, onSelect }: { books: Book[]; startNo: number; scores: Map<string, SearchScore> | null; onSelect: (b: Book) => void }) { return <div className="table-wrap panel"><table><thead><tr><th>No.</th><th>本</th><th>分類</th><th>基準月</th><th>読書状況</th><th>関連資料</th><th></th></tr></thead><tbody>{books.map((b, i) => { const { child } = categoryPath(b.categoryId); return <tr key={b.id} onClick={() => onSelect(b)}><td className="book-no">{startNo + i}</td><td><div className="table-book"><CoverImage src={b.cover} alt="" fallback={<BookOpen />} /><span><strong>{b.title}</strong><AuthorName author={b.author} small /></span></div></td><td>{child?.name}</td><td>{b.baseMonth}</td><td><span className={`status inline ${statusClass[b.status]}`}>{b.status}</span>{scores?.get(b.id) && <ScoreBadge score={scores.get(b.id)!} />}</td><td>{b.links.length}件</td><td><ChevronRight /></td></tr> })}</tbody></table></div> }
+function BookTable({ books, startNo, scores, onSelect }: { books: Book[]; startNo: number; scores: Map<string, SearchScore> | null; onSelect: (b: Book) => void }) { return <div className="table-wrap panel"><table><thead><tr><th>No.</th><th>本 / 動画</th><th>分類</th><th>基準月</th><th>読書状況</th><th>関連資料</th><th></th></tr></thead><tbody>{books.map((b, i) => { const { child } = categoryPath(b.categoryId); return <tr key={b.id} onClick={() => onSelect(b)}><td className="book-no">{startNo + i}</td><td><div className="table-book"><CoverImage src={b.cover} alt="" fallback={<BookOpen />} /><span><strong>{'type' in b && b.type === 'youtube' ? '▶ ' : '📕 '}{b.title}</strong><AuthorName author={b.author} small /></span></div></td><td>{child?.name}</td><td>{b.baseMonth}</td><td><span className={`status inline ${statusClass[b.status]}`}>{'type' in b && b.type === 'youtube' ? (b.memo ? 'AI解析済み' : 'AI未解析') : b.status}</span>{scores?.get(b.id) && <ScoreBadge score={scores.get(b.id)!} />}</td><td>{b.links.length}件</td><td><ChevronRight /></td></tr> })}</tbody></table></div> }
 
 function Empty({ onAdd, hasBooks }: { onAdd: () => void; hasBooks: boolean }) { return <div className="empty panel"><div><BookOpen /></div><h2>{hasBooks ? '条件に合う本がありません' : '最初の一冊を登録しましょう'}</h2><p>{hasBooks ? '検索条件や絞り込みを変えてみてください。' : '表紙や要約、関連資料をまとめて管理できます。'}</p>{!hasBooks && <button className="primary-btn" onClick={onAdd}><Plus /> 本を追加する</button>}</div> }
 
@@ -477,7 +506,7 @@ const categoryLabel = (id: string) => categories.find(c => c.id === id)?.name ??
 /** 詳細画面の前後の本（表示中の一覧での位置） */
 type BookNav = { prev?: Book; next?: Book; index: number; total: number }
 
-function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onSummarize, onSummaryApplied, tab, onTab, onOpen, nav, onStep, keysBlocked, monthOptions, onClose, onSave, onDelete, onZoom }: { book: Book; books: Book[]; summaryJob?: SummaryJob; summaryIssue?: SummaryIssue; onCancelSummary: () => void; onSummarize: (b: Book, scanUrl: string) => void; onSummaryApplied: () => void; tab: ModalTab; onTab: (t: ModalTab) => void; onOpen: (b: Book) => void; nav?: BookNav; onStep: (b: Book) => void; keysBlocked: boolean; monthOptions: string[]; onClose: () => void; onSave: (b: Book, open?: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
+function BookModal({ indexItems, book, books, summaryJob, summaryIssue, onCancelSummary, onSummarize, onSummaryApplied, tab, onTab, onOpen, nav, onStep, keysBlocked, monthOptions, onClose, onSave, onDelete, onZoom }: { indexItems?: Book[]; book: Book; books: Book[]; summaryJob?: SummaryJob; summaryIssue?: SummaryIssue; onCancelSummary: () => void; onSummarize: (b: Book, scanUrl: string) => void; onSummaryApplied: () => void; tab: ModalTab; onTab: (t: ModalTab) => void; onOpen: (b: Book) => void; nav?: BookNav; onStep: (b: Book) => void; keysBlocked: boolean; monthOptions: string[]; onClose: () => void; onSave: (b: Book, open?: Book) => void; onDelete: (id: string) => void; onZoom: (z: Zoom) => void }) {
   const isNew = !book.title
   const [draft, setDraft] = useState<Book>({ ...book, links: withPresetRows(book.links) })
   // 表紙・スキャンから自動で入力した項目と、入力前の値（変更あり／なしの表示用。手で直すと目印を外す）
@@ -651,7 +680,7 @@ function BookModal({ book, books, summaryJob, summaryIssue, onCancelSummary, onS
     <button className="icon-btn" onClick={() => void saveAndClose()} title="保存して閉じる"><X /></button></div>
     {authors.length > 0 && <div className="author-hub-bar"><span className="author-hub-bar-label"><UserRound /> 著者</span>{authors.map(name => <button key={name} type="button" className="author-hub-btn" onClick={() => setHubAuthor(name)} title={`${name} の著者プロフィール（概要・著書・おすすめ・動画・関連情報）を開きます`}><strong>{name}</strong><span>著者プロフィール</span><ChevronRight /></button>)}</div>}
     {hubAuthor && <AuthorHub name={hubAuthor} books={books} currentId={book.id} onOpen={b => { setHubAuthor(null); openRelated(b) }} onClose={() => setHubAuthor(null)} />}
-    {tab === 'similar' && <div className="related-panel"><SimilarBooks book={book} books={books} onOpen={openRelated} /></div>}
+    {tab === 'similar' && <div className="related-panel"><SimilarBooks indexItems={indexItems} book={book} books={books} onOpen={openRelated} /></div>}
     {tab === 'author' && <div className="related-panel"><SameAuthorBooks book={{ ...book, author: draft.author }} books={books} onOpen={openRelated} /></div>}
     <form onSubmit={submit} hidden={tab !== 'edit'}>
     <div className="form-layout"><div className="cover-editor"><CoverImage src={draft.cover} alt={`${draft.title || '表紙'}のプレビュー`} onZoom={onZoom} fallback={canPasteCover
@@ -676,7 +705,7 @@ function SyncIcon({ status }: { status: SyncStatus }) {
 }
 
 // Driveに保存できていない状態は、画面上部にはっきり表示して、その場で接続し直せるようにする
-function DriveAlert({ drive, onDetails }: { drive: ReturnType<typeof useDriveSync>; onDetails: () => void }) {
+function DriveAlert({ drive, onDetails }: { drive: ReturnType<typeof useDriveSync<Book>>; onDetails: () => void }) {
   const info = drive.status === 'signedOut' ? { title: 'Google Driveに接続されていません', text: '変更はこのブラウザにだけ保存され、Driveには保存されません。別の端末とも同期されません。', label: 'Googleでログインして接続', action: drive.connect }
     : drive.status === 'needsFolder' ? { title: 'Google Driveの保存先フォルダが許可されていません', text: '許可するまで、変更はDriveに保存されません。', label: 'MyBooksフォルダを許可', action: drive.grantFolder }
     : drive.status === 'error' ? { title: 'Google Driveとの同期に失敗しました', text: `${drive.message ? `${drive.message}。` : ''}変更はまだDriveに保存されていません。`, label: '再試行', action: drive.syncNow }
@@ -685,7 +714,7 @@ function DriveAlert({ drive, onDetails }: { drive: ReturnType<typeof useDriveSyn
   return <section className={`drive-alert sync-${drive.status}`} role="alert"><CloudAlert /><div><strong>{info.title}</strong><p>{info.text}</p></div><div className="drive-alert-actions"><button className="ghost-btn" onClick={onDetails}>詳細</button><button className="primary-btn" onClick={() => void info.action()}>{info.label}</button></div></section>
 }
 
-function DriveSection({ drive }: { drive: ReturnType<typeof useDriveSync> }) {
+function DriveSection({ drive }: { drive: ReturnType<typeof useDriveSync<Book>> }) {
   if (drive.status === 'unavailable') return <div className="backup-info"><CloudOff /><div><strong>Google Drive保存は未設定です</strong><p>環境変数 <code>VITE_GOOGLE_CLIENT_ID</code> を設定すると、Google Driveに自動保存できます（READMEを参照）。現在はこのブラウザ内にのみ保存されています。</p></div></div>
   const connected = drive.status !== 'signedOut'
   return <div className={`backup-info drive-info sync-${drive.status}`}><SyncIcon status={drive.status} /><div>
@@ -703,7 +732,7 @@ function DriveSection({ drive }: { drive: ReturnType<typeof useDriveSync> }) {
   </div></div>
 }
 
-function BackupModal({ drive, onClose, onExport, onImport }: { drive: ReturnType<typeof useDriveSync>; onClose: () => void; onExport: () => void; onImport: () => void }) { return <div className="modal-backdrop"><section className="modal small"><div className="modal-head"><div><p className="eyebrow">DATA MANAGEMENT</p><h2>保存・バックアップ</h2></div><button className="icon-btn" onClick={onClose}><X /></button></div><DriveSection drive={drive} /><div className="backup-cards"><button onClick={onExport}><Download /><span><strong>バックアップを書き出す</strong><small>全データをJSON形式で保存</small></span></button><button onClick={onImport}><Upload /><span><strong>データを読み込む</strong><small>JSONバックアップまたはCSV</small></span></button></div><p className="hint">読み込み時、JSONは現在のデータを置き換え、CSVは現在の本棚に追加されます。Google Driveに接続中は、読み込んだ内容もDriveに保存されます。</p></section></div> }
+function BackupModal({ drive, onClose, onExport, onImport }: { drive: ReturnType<typeof useDriveSync<Book>>; onClose: () => void; onExport: () => void; onImport: () => void }) { return <div className="modal-backdrop"><section className="modal small"><div className="modal-head"><div><p className="eyebrow">DATA MANAGEMENT</p><h2>保存・バックアップ</h2></div><button className="icon-btn" onClick={onClose}><X /></button></div><DriveSection drive={drive} /><div className="backup-cards"><button onClick={onExport}><Download /><span><strong>バックアップを書き出す</strong><small>全データをJSON形式で保存</small></span></button><button onClick={onImport}><Upload /><span><strong>データを読み込む</strong><small>JSONバックアップまたはCSV</small></span></button></div><p className="hint">読み込み時、JSONは現在のデータを置き換え、CSVは現在の本棚に追加されます。Google Driveに接続中は、読み込んだ内容もDriveに保存されます。</p></section></div> }
 
 function splitCsv(line: string) { const values: string[] = []; let value = '', quoted = false; for (let i = 0; i < line.length; i++) { const char = line[i]; if (char === '"' && line[i + 1] === '"') { value += '"'; i++ } else if (char === '"') quoted = !quoted; else if (char === ',' && !quoted) { values.push(value); value = '' } else value += char } values.push(value); return values }
 // 「表示名::URL」を | で区切る。以前の「種類::表示名::URL」形式も読み込める

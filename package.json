@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/library.test.mjs",
+    "test:browser": "node tests/browser-smoke.cjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -27,6 +29,7 @@
     "eslint-plugin-react-hooks": "latest",
     "eslint-plugin-react-refresh": "latest",
     "globals": "latest",
-    "typescript-eslint": "latest"
+    "typescript-eslint": "latest",
+    "playwright": "1.57.0"
   }
 }

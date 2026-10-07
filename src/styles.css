@@ -128,4 +128,4 @@
 @media(max-width:650px){.content-heading{flex-wrap:wrap;gap:10px}.view-switch.type-switch button{padding:8px 10px}}
 /* マップの配置方法（近さ・意味軸）の切り替え */
 .map-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto;flex-wrap:wrap;justify-content:flex-end}.view-switch.map-mode button{font-size:13px;padding:7px 12px;white-space:nowrap}.map-empty .spin{width:28px;height:28px;color:var(--purple)}
-@media(max-width:650px){.map-actions{justify-content:flex-start}.view-switch.map-mode button{padding:7px 10px}}
+@media(max-width:650px){.map-actions{justify-content:flex-start;width:100%}.view-switch.map-mode{width:100%}.view-switch.map-mode button{flex:1 1 0;justify-content:center;padding:6px 6px;font-size:12px;line-height:1.35;white-space:normal;text-align:center}}

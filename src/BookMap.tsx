@@ -4,6 +4,7 @@ import { CoverImage } from './CoverImage'
 import { categories, statusClass } from './data'
 import { computeAxisScores, loadAxisRefs, type AxisRefs } from './semanticAxes'
 import { dequantize } from './embeddingStore'
+import { pca2 } from './pca'
 import { embedText, recheckRemote, updateBookMap, type MapCache, type MapProgress } from './bookMapData'
 import type { SyncStatus } from './useDriveSync'
 import type { Book } from './types'
@@ -20,12 +21,12 @@ const isVideo = (book: Book) => 'type' in book && book.type === 'youtube'
 /** 意味軸スコア [横, 縦]。横は +1 に近いほど技術寄り、縦は +1 に近いほど実践寄り */
 type AxisScore = [number, number]
 interface Point { book: Book; x: number; y: number; color: string; active: boolean; axis?: AxisScore }
-/** 意味軸で配置（意味軸スコアをそのまま座標にする）／意味の近さで配置（UMAP） */
-type MapMode = 'similar' | 'axes'
+/** 意味軸で配置（意味軸スコアをそのまま座標にする）／意味の近さで配置（UMAP）／主成分で配置（PCA） */
+type MapMode = 'similar' | 'pca' | 'axes'
 // 既定を「意味軸で配置」に変えたため、以前の選択は引き継がずキーを改める
 const MODE_KEY = 'mybooks-map-mode-v2'
-// 既定は「意味軸で配置」。「意味の近さで配置」を選んだときだけ記憶して次回も使う
-const readMode = (): MapMode => { try { return localStorage.getItem(MODE_KEY) === 'similar' ? 'similar' : 'axes' } catch { return 'axes' } }
+// 既定は「意味軸で配置」。「意味の近さで配置（UMAP）」「主成分で配置（PCA）」を選んだときだけ記憶して次回も使う
+const readMode = (): MapMode => { try { const m = localStorage.getItem(MODE_KEY); return m === 'similar' || m === 'pca' ? m : 'axes' } catch { return 'axes' } }
 
 /**
  * 「意味の近さで配置」で、分類ごとの重心を置く画面上のおおよその向き（画面のyは下向きが正）。
@@ -59,11 +60,18 @@ function orientLayout(items: { x: number; y: number; group: string; anchor: bool
   const { flip, angle } = flipped.score > plain.score ? flipped : plain
   const cos = Math.cos(angle), sin = Math.sin(angle)
   const rotated = items.map(p => { const x = p.x - mx, y = flip * (p.y - my); return [x * cos - y * sin, x * sin + y * cos] as [number, number] })
-  // 回転で四隅にはみ出した分を、外れ値を除いた範囲で縮尺し直す
+  // 回転で四隅にはみ出した分を縮尺し直す
+  return fitToView(rotated)
+}
+
+/** 縦横の比率は変えずに、外れ値を除いた範囲が中心0・おおむね -1〜1 に収まるよう縮尺を合わせる */
+function fitToView(coords: [number, number][], centered = false): [number, number][] {
   const range = (values: number[]) => { const v = [...values].sort((a, b) => a - b), q = (r: number) => v[Math.round((v.length - 1) * r)]; return v.length >= 50 ? [q(0.02), q(0.98)] : [v[0], v[v.length - 1]] }
-  const [x0, x1] = range(rotated.map(c => c[0])), [y0, y1] = range(rotated.map(c => c[1]))
-  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, span = Math.max(x1 - x0, y1 - y0) / 2 || 1
-  return rotated.map(([x, y]) => [(x - cx) / span, (y - cy) / span])
+  const [x0, x1] = range(coords.map(c => c[0])), [y0, y1] = range(coords.map(c => c[1]))
+  // PCAでは原点（平均）を画面の中心に置き、中心線がPC1・PC2の0を表すようにする
+  const cx = centered ? 0 : (x0 + x1) / 2, cy = centered ? 0 : (y0 + y1) / 2
+  const span = (centered ? Math.max(Math.abs(x0), Math.abs(x1), Math.abs(y0), Math.abs(y1)) : Math.max(x1 - x0, y1 - y0) / 2) || 1
+  return coords.map(([x, y]) => [(x - cx) / span, (y - cy) / span])
 }
 interface View { k: number; tx: number; ty: number }
 
@@ -89,10 +97,23 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
     return computeAxisScores(items, refs)
   }, [books, cache, refs])
 
+  // 主成分（PCA）は「主成分で配置」を選んだときだけ計算する
+  const pca = useMemo(() => {
+    if (!cache || mode !== 'pca') return null
+    const items = books.flatMap(book => { const entry = cache.entries[book.id]; return entry && embedText(book) ? [{ book, vector: dequantize(entry.e) }] : [] })
+    const result = pca2(items.map(i => i.vector))
+    return result && { ...result, items }
+  }, [books, cache, mode])
+
   const points = useMemo<Point[]>(() => {
     if (!cache) return []
     let list: Point[]
-    if (mode === 'axes') {
+    if (mode === 'pca') {
+      if (!pca) return []
+      // 横をPC1、縦をPC2にする。画面のyは下向きが正なので縦は符号を反転し、PC2が大きいほど上にする
+      const coords = fitToView(pca.coords.map(([a, b]) => [a, -b]), true)
+      list = pca.items.map(({ book }, i) => ({ book, x: coords[i][0], y: coords[i][1], axis: axisScores?.get(book.id), color: PARENT_COLORS[parentOf(book.categoryId)] ?? OTHER_COLOR, active: visibleIds.has(book.id) }))
+    } else if (mode === 'axes') {
       if (!axisScores) return []
       // 意味軸スコアを座標にする。画面のyは下向きが正なので縦は符号を反転し、値が大きいほど上（右上が技術・実践寄り）にする
       list = books.flatMap(book => { const a = axisScores.get(book.id); return a ? [{ book, x: a[0], y: -a[1], axis: a, color: PARENT_COLORS[parentOf(book.categoryId)] ?? OTHER_COLOR, active: visibleIds.has(book.id) }] : [] })
@@ -104,7 +125,7 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
     }
     // 薄い点を先に描き、絞り込みに合う点を上に重ねる
     return list.sort((a, b) => Number(a.active) - Number(b.active))
-  }, [books, cache, visibleIds, mode, axisScores])
+  }, [books, cache, visibleIds, mode, axisScores, pca])
   const axesPreparing = mode === 'axes' && Boolean(cache) && !axisScores && !axisError
   const untitled = books.filter(b => !embedText(b)).length
   const pending = books.length - untitled - points.length
@@ -123,17 +144,20 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
       <div className="map-actions">
         <div className="view-switch map-mode" role="group" aria-label="マップの配置方法">
           <button className={mode === 'axes' ? 'active' : ''} aria-pressed={mode === 'axes'} onClick={() => setMode('axes')} title="意味軸：指定した2軸で配置します。横を『社会 ↔ 技術』、縦を『理論 ↔ 実践』の意味軸スコアで置きます">意味軸で配置</button>
-          <button className={mode === 'similar' ? 'active' : ''} aria-pressed={mode === 'similar'} onClick={() => setMode('similar')} title="意味の近さ：内容が似ている本・動画を近くに配置します">意味の近さで配置</button>
+          <button className={mode === 'similar' ? 'active' : ''} aria-pressed={mode === 'similar'} onClick={() => setMode('similar')} title="UMAP（非線形の次元圧縮）：内容が似ている本・動画が近くに集まるように配置します。座標の向きに意味はありません">意味の近さで配置（UMAP）</button>
+          <button className={mode === 'pca' ? 'active' : ''} aria-pressed={mode === 'pca'} onClick={() => setMode('pca')} title="PCA（主成分分析、線形の次元圧縮）：ライブラリ全体でばらつきが最も大きい2方向を、横（PC1）・縦（PC2）にして配置します">主成分で配置（PCA）</button>
         </div>
-        {mode === 'similar' && <button className="secondary-btn map-relayout" disabled={busy || points.length === 0} onClick={relayout} title="すべての本の配置をUMAPで計算し直します"><RefreshCw /> 配置を再計算</button>}
+        {mode === 'similar' && <button className="secondary-btn map-relayout" disabled={busy || points.length === 0} onClick={relayout} title="すべての本の配置をUMAPで計算し直します"><RefreshCw /> UMAPを再計算</button>}
       </div>
     </div>
-    <MapCanvas key={mode} points={points} mode={mode} preparing={axesPreparing} onSelect={onSelect} />
+    <MapCanvas key={mode} points={points} mode={mode} pcaRatios={pca?.ratios} preparing={axesPreparing} onSelect={onSelect} />
     <div className="map-foot">
       {busy ? <span className="map-progress"><LoaderCircle className="spin" />{progressLabel(progress)}{progress.total ? <progress value={progress.done} max={progress.total} /> : null}</span>
         : <span>{activeCount === points.length ? `${points.length}件を配置` : `${points.length}件中 ${activeCount}件が条件に一致`}{untitled > 0 && `・タイトルのない${untitled}冊は対象外`}{pending > 0 && `・未計算 ${pending}冊`}</span>}
       <span className="map-note">{mode === 'similar'
-        ? '● 本・■ 動画、色は分類。位置は内容の類似度をもとに配置しています。縦横の座標そのものに意味はありません（全体として社会寄り・技術寄りなどの傾向が見える場合があります）。'
+        ? '● 本・■ 動画、色は分類。UMAPで、内容の類似度をもとに似たもの同士が近くに集まるよう配置しています。縦横の座標そのものに意味はありません（全体として社会寄り・技術寄りなどの傾向が見える場合があります）。'
+        : mode === 'pca'
+        ? `● 本・■ 動画、色は分類。PCA（主成分分析）で、Embeddingのばらつきが最も大きい方向を横（PC1）、次に大きい方向を縦（PC2）にして配置しています。中心がライブラリ全体の平均です。PC1・PC2が何を表すかは、並んだ本から読み取ってください。${pca ? `寄与率：PC1 ${pct(pca.ratios[0])}・PC2 ${pct(pca.ratios[1])}（2軸で全体のばらつきの ${pct(pca.ratios[0] + pca.ratios[1])} を表示）。` : ''}`
         : '● 本・■ 動画、色は分類。横は『社会 ↔ 技術』、縦は『理論 ↔ 実践』の意味軸スコアで配置しています。スコアはタイトル・要約・分類から本と動画で同じ方法で求めた、ライブラリ全体の中での相対的な位置です（中央が中央値）。'}</span>
     </div>
     {axisError && <p className="map-drive-note">意味軸スコアを計算できませんでした：{axisError}</p>}
@@ -142,10 +166,12 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
   </section>
 }
 
+const pct = (r: number) => `${(r * 100).toFixed(1)}%`
+
 function progressLabel(p: MapProgress) {
   if (p.phase === 'loading') return '保存済みのマップを読み込み中…'
   if (p.phase === 'embedding') return `内容をベクトル化しています（${p.done}/${p.total}冊）…`
-  if (p.phase === 'layout') return `内容の近さから配置を計算しています（${p.done}%）…`
+  if (p.phase === 'layout') return `内容の近さから配置を計算しています（UMAP・${p.done}%）…`
   return ''
 }
 
@@ -195,7 +221,7 @@ function useAxisRefs(model: string | undefined) {
 }
 
 /** Canvasに点を描き、ズーム・ドラッグ移動・ホバー・クリックを扱う */
-function MapCanvas({ points, mode, preparing, onSelect }: { points: Point[]; mode: MapMode; preparing: boolean; onSelect: (book: Book) => void }) {
+function MapCanvas({ points, mode, pcaRatios, preparing, onSelect }: { points: Point[]; mode: MapMode; pcaRatios?: [number, number]; preparing: boolean; onSelect: (book: Book) => void }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
@@ -338,12 +364,13 @@ function MapCanvas({ points, mode, preparing, onSelect }: { points: Point[]; mod
 
   const center = (factor: number) => zoomAt(factor, size.w / 2, size.h / 2)
   return <div className="map-stage" ref={wrapRef}>
-    {/* 中心線と四辺のラベルは、座標に意味がある「意味軸で配置」のときだけ表示する */}
-    {mode === 'axes' && <div className="map-guides" aria-hidden="true"><i className="h" /><i className="v" /></div>}
-    <canvas ref={canvasRef} role="img" aria-label={mode === 'axes' ? '本の意味軸マップ。横は社会から技術、縦は下の理論から上の実践への傾きを表します' : '本の分類マップ。内容が近い本ほど近くに表示されます'} className={shownHover ? 'pointing' : undefined}
+    {/* 中心線と四辺のラベルは、座標に意味がある「意味軸で配置」「主成分で配置（PCA）」のときだけ表示する */}
+    {mode !== 'similar' && <div className="map-guides" aria-hidden="true"><i className="h" /><i className="v" /></div>}
+    <canvas ref={canvasRef} role="img" aria-label={mode === 'axes' ? '本の意味軸マップ。横は社会から技術、縦は下の理論から上の実践への傾きを表します' : mode === 'pca' ? '本の主成分（PCA）マップ。横は第1主成分（PC1）、縦は第2主成分（PC2）を表します' : '本の分類マップ（UMAP）。内容が近い本ほど近くに表示されます'} className={shownHover ? 'pointing' : undefined}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onPointerLeave={e => { if (e.pointerType === 'mouse' && !pointers.current.size) setHover(null) }} />
     {mode === 'axes' && <MapAxes />}
-    {points.length === 0 && <div className="map-empty">{preparing ? <><LoaderCircle className="spin" /><p>意味軸スコアを計算しています…</p></> : <><BookOpen /><p>マップに表示できる本がまだありません</p></>}</div>}
+    {mode === 'pca' && <PcaAxes ratios={pcaRatios} />}
+    {points.length === 0 && <div className="map-empty">{preparing ? <><LoaderCircle className="spin" /><p>意味軸スコアを計算しています…</p></> : <><BookOpen /><p>{mode === 'pca' ? 'PCAで配置するには、ベクトル化済みの本が3冊以上必要です' : 'マップに表示できる本がまだありません'}</p></>}</div>}
     <div className="map-zoom">
       <button onClick={() => center(1.5)} aria-label="拡大" title="拡大"><ZoomIn /></button>
       <button onClick={() => center(1 / 1.5)} aria-label="縮小" title="縮小"><ZoomOut /></button>
@@ -360,6 +387,14 @@ function MapAxes() {
     <span className="right">技術 →</span>
     <span className="top">↑ 実践</span>
     <span className="bottom">↓ 理論</span>
+  </div>
+}
+
+/** 「主成分で配置（PCA）」の軸ラベル。PC1は右、PC2は上が正の向き */
+function PcaAxes({ ratios }: { ratios?: [number, number] }) {
+  return <div className="map-axes" aria-hidden="true">
+    <span className="right">PC1{ratios && `（${pct(ratios[0])}）`} →</span>
+    <span className="top">↑ PC2{ratios && `（${pct(ratios[1])}）`}</span>
   </div>
 }
 

@@ -8,6 +8,7 @@ const search = await server.ssrLoadModule('/src/semanticSearch.ts')
 const picks = await server.ssrLoadModule('/src/aiPicks.ts')
 const interests = await server.ssrLoadModule('/src/interestAnalysis.ts')
 const analyze = await server.ssrLoadModule('/api/youtube-analyze.ts')
+const videoText = await server.ssrLoadModule('/src/videoText.ts')
 const interestApi = await server.ssrLoadModule('/api/library-interests.ts')
 const video = (id = 'aaaaaaaaaaa', extra = {}) => ({ id: `youtube:${id}`, type: 'youtube', videoId: id, title: 'AIと仕事', channelTitle: '技術チャンネル', description: '製造業の生成AI活用', videoUrl: `https://www.youtube.com/watch?v=${id}`, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', ...extra })
 const book = { id: 'book-1', title: 'AIの本', author: '著者', categoryId: 'c1', cover: '', baseMonth: '', status: '未読', memo: 'データを用いた改善', links: [], updatedAt: '2026-10-01T00:00:00Z' }
@@ -45,6 +46,13 @@ test('AI output keeps existing categories and normalizes near-miss fields', () =
  assert.equal(analyze.cleanAnalysis({ ...analysis, subCategory: 'F-1' }).subCategory, 'f1')
  assert.equal(analyze.cleanAnalysis({ ...analysis, subCategory: undefined, category: 'f' }).subCategory, 'f1')
  assert.equal(analyze.cleanAnalysis([analysis]).category, 'c')
+})
+test('video summaries drop the fixed metadata disclaimer', () => {
+ assert.equal(videoText.cleanSummary('タイトルと概要欄に基づく整理。本動画は、ロックバンドの解説です。'), '本動画は、ロックバンドの解説です。')
+ assert.equal(videoText.cleanSummary('本動画は解説です。タイトルと概要欄に基づく整理'), '本動画は解説です。タイトルと概要欄に基づく整理')
+ assert.equal(analyze.cleanAnalysis({ ...analysis, summary: 'タイトルと概要欄に基づく整理。要約本文' }).summary, '要約本文')
+ const copied = videoText.videoCopyText({ title: 'T', videoUrl: 'https://www.youtube.com/watch?v=x', summary: 'タイトルと概要欄に基づく整理。S', keyPoints: ['a', 'b'] })
+ assert.equal(copied, 'T\n\nhttps://www.youtube.com/watch?v=x\n\nS\n\n重要ポイント\n・a\n・b')
 })
 test('candidate pool retains both media and ranking still includes keyword matches', () => {
  const books = Array.from({ length: 20 }, (_, i) => ({ ...book, id: `book-${i}` }))

@@ -16,7 +16,7 @@ function sameAuthorBooks(book: Book, books: Book[]): Book[] {
 }
 
 /** 類似度の横棒。上位の本は数%しか差がないため、一覧の中の最小〜最大を棒の長さ20〜100%に広げて違いを見やすくする */
-function ScoreBar({ score, ratio }: { score: number; ratio: number }) {
+export function ScoreBar({ score, ratio }: { score: number; ratio: number }) {
   const percent = Math.round(Math.max(0, score) * 100)
   return <span className="related-score" title={`タイトルと要約の内容の近さ：${percent}%`} aria-label={`類似度 ${percent}%`}>
     <span className="related-score-track"><span className="related-score-fill" style={{ width: `${20 + 80 * ratio}%` }} /></span>

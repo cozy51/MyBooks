@@ -8,18 +8,22 @@ export function videoItem(video: YouTubeVideo): LibraryItem {
     status: '未読', memo: video.summary || '', description: video.description, tags: video.tags, embeddingText: video.embeddingText,
     links: [{ id: video.videoId, label: 'YouTube', url: video.videoUrl }], updatedAt: video.updatedAt }
 }
-/** Existing entries (including AI results) always win. Sync only appends new video IDs,
- * except that a video unliked here and liked again on YouTube becomes visible again. */
+/** Existing entries (including AI results) always win; sync only adds new IDs. The order follows
+ * YouTube's liked list (most recent like first); videos YouTube no longer returns move to the end.
+ * A video unliked here and liked again on YouTube becomes visible again. */
 export function appendVideos(existing: YouTubeVideo[], incoming: YouTubeVideo[]) {
-  const ids = new Set(existing.map(v => v.videoId)), relikedIds = new Set<string>(), added: YouTubeVideo[] = []
-  const unliked = new Set(existing.filter(v => v.unlikedAt).map(v => v.videoId))
-  for (const v of incoming) {
-    if (unliked.has(v.videoId)) relikedIds.add(v.videoId)
-    else if (!ids.has(v.videoId)) { ids.add(v.videoId); added.push(v) }
-  }
+  const byId = new Map(existing.map(v => [v.videoId, v])), seen = new Set<string>(), ordered: YouTubeVideo[] = []
   const now = new Date().toISOString()
-  const kept = existing.map(v => relikedIds.has(v.videoId) ? { ...v, unlikedAt: undefined, updatedAt: now } : v)
-  return { videos: [...kept, ...added], added: added.length + relikedIds.size, existing: incoming.length - added.length - relikedIds.size }
+  let added = 0, reliked = 0
+  for (const v of incoming) {
+    if (seen.has(v.videoId)) continue
+    seen.add(v.videoId)
+    const old = byId.get(v.videoId)
+    if (!old) { added++; ordered.push(v) }
+    else if (old.unlikedAt) { reliked++; ordered.push({ ...old, unlikedAt: undefined, updatedAt: now }) }
+    else ordered.push(old)
+  }
+  return { videos: [...ordered, ...existing.filter(v => !seen.has(v.videoId))], added: added + reliked, existing: incoming.length - added - reliked }
 }
 export function validateVideos(value: unknown): YouTubeVideo[] {
   if (!Array.isArray(value)) throw new Error('動画データの形式が正しくありません')

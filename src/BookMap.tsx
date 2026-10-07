@@ -92,8 +92,8 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
     let list: Point[]
     if (mode === 'axes') {
       if (!axisScores) return []
-      // 意味軸スコアをそのまま座標にする（画面のyは下向きが正なので、そのまま使うと理論が上・実践が下になる）
-      list = books.flatMap(book => { const a = axisScores.get(book.id); return a ? [{ book, x: a[0], y: a[1], axis: a, color: PARENT_COLORS[parentOf(book.categoryId)] ?? OTHER_COLOR, active: visibleIds.has(book.id) }] : [] })
+      // 意味軸スコアを座標にする。画面のyは下向きが正なので縦は符号を反転し、値が大きいほど上（右上が技術・実践寄り）にする
+      list = books.flatMap(book => { const a = axisScores.get(book.id); return a ? [{ book, x: a[0], y: -a[1], axis: a, color: PARENT_COLORS[parentOf(book.categoryId)] ?? OTHER_COLOR, active: visibleIds.has(book.id) }] : [] })
     } else {
       const placed = books.flatMap(book => { const p = cache.layout[book.id]; return p && embedText(book) ? [{ book, x: p[0], y: p[1], group: parentOf(book.categoryId), anchor: !isVideo(book) }] : [] })
       // 向きの基準には本だけを使う（動画は分類の付き方が本と異なるため）
@@ -338,7 +338,7 @@ function MapCanvas({ points, mode, preparing, onSelect }: { points: Point[]; mod
   return <div className="map-stage" ref={wrapRef}>
     {/* 中心線と四辺のラベルは、座標に意味がある「意味軸で配置」のときだけ表示する */}
     {mode === 'axes' && <div className="map-guides" aria-hidden="true"><i className="h" /><i className="v" /></div>}
-    <canvas ref={canvasRef} role="img" aria-label={mode === 'axes' ? '本の意味軸マップ。横は社会から技術、縦は理論から実践への傾きを表します' : '本の分類マップ。内容が近い本ほど近くに表示されます'} className={shownHover ? 'pointing' : undefined}
+    <canvas ref={canvasRef} role="img" aria-label={mode === 'axes' ? '本の意味軸マップ。横は社会から技術、縦は下の理論から上の実践への傾きを表します' : '本の分類マップ。内容が近い本ほど近くに表示されます'} className={shownHover ? 'pointing' : undefined}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onPointerLeave={e => { if (e.pointerType === 'mouse' && !pointers.current.size) setHover(null) }} />
     {mode === 'axes' && <MapAxes />}
     {points.length === 0 && <div className="map-empty">{preparing ? <><LoaderCircle className="spin" /><p>意味軸スコアを計算しています…</p></> : <><BookOpen /><p>マップに表示できる本がまだありません</p></>}</div>}
@@ -356,8 +356,8 @@ function MapAxes() {
   return <div className="map-axes" aria-hidden="true">
     <span className="left">← 社会</span>
     <span className="right">技術 →</span>
-    <span className="top">↑ 理論</span>
-    <span className="bottom">↓ 実践</span>
+    <span className="top">↑ 実践</span>
+    <span className="bottom">↓ 理論</span>
   </div>
 }
 

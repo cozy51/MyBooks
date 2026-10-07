@@ -45,7 +45,7 @@ export function RelatedRow({ book, score, ratio, current, copy, onOpen }: { book
 }
 
 /** 分類マップと同じEmbeddingを使って、内容が近い本を10冊表示する */
-export function SimilarBooks({ book, books, onOpen }: { book: Book; books: Book[]; onOpen: (b: Book) => void }) {
+export function SimilarBooks({ book, books, onOpen, indexItems = books }: { indexItems?: Book[]; book: Book; books: Book[]; onOpen: (b: Book) => void }) {
   const [result, setResult] = useState<{ id: string; items: SimilarBook[] | null } | null>(null)
   const [computing, setComputing] = useState(false)
   const [error, setError] = useState('')
@@ -59,7 +59,7 @@ export function SimilarBooks({ book, books, onOpen }: { book: Book; books: Book[
   const compute = async () => {
     setComputing(true); setError('')
     try {
-      const { error } = await updateBookMap(books, () => {})
+      const { error } = await updateBookMap(indexItems, () => {})
       if (error) setError(error.message)
       setResult({ id: book.id, items: await findSimilarBooks(book, books) })
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setComputing(false) }

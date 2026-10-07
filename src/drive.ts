@@ -16,6 +16,8 @@ const TOKEN_KEY = 'mybooks-drive-token'
 /** 全ページスキャンなど、アプリが作っていないファイルを読むための読み取り専用スコープ（要約のときだけ求める） */
 const READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
 const READ_TOKEN_KEY = 'mybooks-drive-read-token'
+export const YOUTUBE_SCOPE = 'https://www.googleapis.com/auth/youtube.readonly'
+const YOUTUBE_TOKEN_KEY = 'mybooks-youtube-token'
 const API = 'https://www.googleapis.com/drive/v3/files'
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files'
 
@@ -87,12 +89,15 @@ export const storedToken = () => savedToken(TOKEN_KEY)
 /** セッション中に保持している、読み取り専用スコープ付きのトークン（期限切れなら null） */
 export const storedReadToken = () => savedToken(READ_TOKEN_KEY)
 
-export function clearToken() { try { sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(READ_TOKEN_KEY) } catch { /* noop */ } }
+export const storedYouTubeToken = () => savedToken(YOUTUBE_TOKEN_KEY)
+export function clearYouTubeToken() { sessionStorage.removeItem(YOUTUBE_TOKEN_KEY) }
+
+export function clearToken() { try { sessionStorage.removeItem(YOUTUBE_TOKEN_KEY); sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(READ_TOKEN_KEY) } catch { /* noop */ } }
 
 /** 受け取ったトークンを保存する（読み取り専用の権限も含んでいれば、要約用のトークンとしても使う） */
 function saveToken(token: string, expiresIn: number | undefined, scope: string | undefined, key?: string) {
   const value = JSON.stringify({ token, expiresAt: Date.now() + (expiresIn ?? 3600) * 1000 })
-  const keys = key ? [key] : [TOKEN_KEY, ...(scope?.split(' ').includes(READ_SCOPE) ? [READ_TOKEN_KEY] : [])]
+  const keys = [TOKEN_KEY, ...(scope?.split(' ').includes(READ_SCOPE) ? [READ_TOKEN_KEY] : []), ...(scope?.split(' ').includes(YOUTUBE_SCOPE) ? [YOUTUBE_TOKEN_KEY] : []), ...(key ? [key] : [])]
   try { for (const k of keys) sessionStorage.setItem(k, value) } catch { /* noop */ }
   for (const listener of tokenListeners) listener(token)
 }
@@ -144,14 +149,14 @@ if (typeof window !== 'undefined' && DRIVE_CLIENT_ID) {
 }
 
 /** ログイン画面（ポップアップ）を出して、サーバーにログインを保管してもらう */
-async function signInWithServer(): Promise<string> {
+async function signInWithServer(extraScope = ''): Promise<string> {
   await loadGis()
   const oauth = window.google?.accounts.oauth2
   if (!oauth) throw new Error('Googleのログイン機能を読み込めませんでした')
   const code = await new Promise<string>((resolve, reject) => {
     oauth.initCodeClient({
-      client_id: DRIVE_CLIENT_ID, scope: `${SCOPE} ${READ_SCOPE}`, ux_mode: 'popup', include_granted_scopes: true,
-      callback: r => r.code ? resolve(r.code) : reject(new Error(r.error_description || r.error || 'ログインできませんでした')),
+      client_id: DRIVE_CLIENT_ID, scope: `${SCOPE} ${READ_SCOPE} ${extraScope}`.trim(), ux_mode: 'popup', include_granted_scopes: true,
+      callback: r => r.code ? resolve(r.code) : reject(new Error('Googleの認証に失敗しました。もう一度ログインしてください。')),
       error_callback: e => reject(new Error(e.type === 'popup_closed' ? 'ログインがキャンセルされました' : 'ログイン画面を開けませんでした（ポップアップの許可を確認してください）')),
     }).requestCode()
   })
@@ -165,8 +170,14 @@ const tokenClients = new Map<string, TokenClient>()
 async function requestToken(scope: string, key: string): Promise<string> {
   // サーバーにログインを保管できるなら、そちらを使う（一度ログインすれば、それ以降はログインが切れない）
   const refreshed = await refreshToken()
-  if (refreshed && (key !== READ_TOKEN_KEY || storedReadToken())) return refreshed
-  if (serverAuth) return signInWithServer()
+  const hasScope = () => key === READ_TOKEN_KEY ? storedReadToken() : key === YOUTUBE_TOKEN_KEY ? storedYouTubeToken() : storedToken()
+  if (refreshed && hasScope()) return refreshed
+  if (serverAuth) {
+    await signInWithServer(key === YOUTUBE_TOKEN_KEY ? YOUTUBE_SCOPE : '')
+    const token = hasScope()
+    if (!token) throw new Error(key === YOUTUBE_TOKEN_KEY ? 'YouTubeの読み取り権限が許可されませんでした。同期時に許可してください。' : '必要なGoogleの権限が許可されませんでした')
+    return token
+  }
   await loadGis()
   const oauth = window.google?.accounts.oauth2
   if (!oauth) throw new Error('Googleのログイン機能を読み込めませんでした')
@@ -174,7 +185,7 @@ async function requestToken(scope: string, key: string): Promise<string> {
     let tokenClient = tokenClients.get(scope)
     if (!tokenClient) { tokenClient = oauth.initTokenClient({ client_id: DRIVE_CLIENT_ID, scope, callback: () => {} }); tokenClients.set(scope, tokenClient) }
     tokenClient.callback = r => {
-      if (!r.access_token) return reject(new Error(r.error_description || r.error || 'ログインできませんでした'))
+      if (!r.access_token) return reject(new Error('Googleの認証に失敗しました。もう一度ログインしてください。'))
       // 許可画面で一部の権限のチェックを外された場合は、許可されなかったものとして扱う
       const granted = r.scope?.split(' ') ?? []
       if (r.scope && !scope.split(' ').every(s => granted.includes(s))) return reject(new Error('必要な権限が許可されませんでした'))
@@ -195,6 +206,11 @@ export async function signInForRead(): Promise<string> {
   const read = storedReadToken()
   if (!read) throw new Error('読み取り専用の権限が許可されませんでした')
   return read
+}
+
+export async function signInForYouTube(): Promise<string> {
+  if (!DRIVE_CLIENT_ID) throw new Error('YouTube連携にはGoogleログインの設定が必要です。設定画面の案内をご確認ください。')
+  return storedYouTubeToken() ?? requestToken(`${SCOPE} ${YOUTUBE_SCOPE}`, YOUTUBE_TOKEN_KEY)
 }
 
 export function signOut() {

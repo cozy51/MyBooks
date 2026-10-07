@@ -31,4 +31,4 @@ function devApi(): Plugin {
   }
 }
 
-export default defineConfig({ plugins: [react(), devApi()] })
+export default defineConfig({ plugins: [react(), devApi()], optimizeDeps: { include: ['umap-js'] } })

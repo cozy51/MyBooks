@@ -43,7 +43,8 @@ export async function authorized(request: Request): Promise<boolean> {
   const token = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1]
   if (!token) return false
   if ((verified.get(token) ?? 0) > Date.now()) return true
-  const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(token)}`)
+  let res: Response
+  try { res = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(token)}`, { signal: AbortSignal.timeout(10_000) }) } catch { return false }
   if (!res.ok) return false
   const info = await res.json() as { aud?: string; azp?: string; expires_in?: string }
   if (info.aud !== clientId && info.azp !== clientId) return false

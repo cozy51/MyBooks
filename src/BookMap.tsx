@@ -59,8 +59,8 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
     <MapCanvas points={points} onSelect={onSelect} />
     <div className="map-foot">
       {busy ? <span className="map-progress"><LoaderCircle className="spin" />{progressLabel(progress)}{progress.total ? <progress value={progress.done} max={progress.total} /> : null}</span>
-        : <span>{activeCount === points.length ? `${points.length}冊を配置` : `${points.length}冊中 ${activeCount}冊が条件に一致`}{untitled > 0 && `・タイトルのない${untitled}冊は対象外`}{pending > 0 && `・未計算 ${pending}冊`}</span>}
-      <span className="map-note">位置はタイトルと要約の内容の近さ、色は分類を表します。軸は厳密な意味を持ちませんが、横方向は『社会 ↔ 技術』、縦方向は『抽象 ↔ 具体』の傾向として見ることができます。</span>
+        : <span>{activeCount === points.length ? `${points.length}件を配置` : `${points.length}件中 ${activeCount}件が条件に一致`}{untitled > 0 && `・タイトルのない${untitled}冊は対象外`}{pending > 0 && `・未計算 ${pending}冊`}</span>}
+      <span className="map-note">● 本・▶ 動画。位置はタイトルと要約の内容の近さ、色は分類を表します。軸は厳密な意味を持ちませんが、横方向は『社会 ↔ 技術』、縦方向は『抽象 ↔ 具体』の傾向として見ることができます。</span>
     </div>
     {error && <div className="map-error" role="alert"><p>{error.message}</p>{error.code === 'unauthorized' && driveStatus !== 'unavailable' && <button className="primary-btn" onClick={onConnect}><Cloud /> Googleでログインして接続</button>}</div>}
     {!error && driveError && <p className="map-drive-note">マップのデータをGoogle Driveに保存できませんでした（このブラウザには保存済み）：{driveError}</p>}
@@ -145,7 +145,7 @@ function MapCanvas({ points, onSelect }: { points: Point[]; onSelect: (book: Boo
       if (s.x < -10 || s.y < -10 || s.x > size.w + 10 || s.y > size.h + 10) continue
       if (p.active) onScreen.push({ p, ...s })
       ctx.beginPath()
-      ctx.arc(s.x, s.y, p.active ? r : r * 0.6, 0, Math.PI * 2)
+      if ('type' in p.book && p.book.type === 'youtube') { const radius = p.active ? r : r * 0.6; ctx.moveTo(s.x + radius, s.y); ctx.lineTo(s.x - radius, s.y - radius); ctx.lineTo(s.x - radius, s.y + radius); ctx.closePath() } else ctx.arc(s.x, s.y, p.active ? r : r * 0.6, 0, Math.PI * 2)
       ctx.fillStyle = p.active ? p.color : DIM_COLOR
       ctx.fill()
       if (p.active) { ctx.lineWidth = 1.5; ctx.strokeStyle = '#ffffff'; ctx.stroke() }
@@ -288,9 +288,9 @@ function MapTooltip({ point, pos, size, touch }: { point: Point; pos: { x: numbe
     <div className="map-tooltip-cover"><CoverImage src={book.cover} alt="" width={200} fallback={<BookOpen />} /></div>
     <div className="map-tooltip-body">
       <div className="category-line"><i style={{ background: point.color }} />{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div>
-      <strong>{book.title}</strong>
+      <strong>{'type' in book && book.type === 'youtube' ? '▶ ' : '📕 '}{book.title}</strong>
       <p>{memo ? (memo.length > 100 ? `${memo.slice(0, 100)}…` : memo) : '要約は未登録です'}</p>
-      <span className={`status mini ${statusClass[book.status]}`}>{book.status}</span>
+      <span className={`status mini ${statusClass[book.status]}`}>{'type' in book && book.type === 'youtube' ? (book.memo ? 'AI解析済み' : 'AI未解析') : book.status}</span>
       {touch && <small className="map-tooltip-hint">もう一度タップで詳細を開く</small>}
     </div>
   </div>

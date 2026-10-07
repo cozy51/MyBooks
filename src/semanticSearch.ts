@@ -5,7 +5,7 @@
 import * as drive from './drive'
 import { categories } from './data'
 import { dequantize, dot, driveJsonFile, EmbedError, fetchEmbeddings, hash, loadLocal, quantize, saveLocal, type VectorEntry } from './embeddingStore'
-import type { Book } from './types'
+import type { Book, LibraryItem } from './types'
 
 export const SEARCH_FILE_NAME = 'MyBooks-search.json'
 const DB_KEY = 'search-index-v1'
@@ -33,7 +33,8 @@ export function categoryName(id: string): string {
 export function searchText(book: Book): string | null {
   const title = book.title.trim()
   if (!title) return null
-  return [title, book.author.trim(), categoryName(book.categoryId), book.memo.trim()].filter(Boolean).join('\n')
+  const item = book as Partial<LibraryItem>
+  return [title, book.author.trim(), categoryName(book.categoryId), book.memo.trim(), item.description?.trim(), item.tags?.join(' '), item.embeddingText?.trim()].filter(Boolean).join('\n')
 }
 
 // ---- 書籍側のベクトル（変わった本だけ計算する） ----

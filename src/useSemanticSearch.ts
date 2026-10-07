@@ -18,7 +18,7 @@ export type SemanticState =
  * - 本の追加・編集のあと、検索用テキストが変わった本だけベクトルを更新する
  * - 検索文は入力が止まってから、検索文だけをEmbedding APIに送る
  */
-export function useSemanticSearch(books: Book[], query: string, enabled: boolean, driveStatus: SyncStatus) {
+export function useSemanticSearch(books: Book[], query: string, enabled: boolean, driveStatus: SyncStatus, deferUntilQuery = false) {
   const [index, setIndex] = useState<SearchIndex | null>(null)
   const [progress, setProgress] = useState<IndexProgress | null>(null)
   const [indexError, setIndexError] = useState<EmbedError | null>(null)
@@ -43,11 +43,12 @@ export function useSemanticSearch(books: Book[], query: string, enabled: boolean
       }
     } finally { running.current = false; setProgress(null) }
   }, [])
+  const shouldIndex = !deferUntilQuery || Boolean(query.trim())
   useEffect(() => {
-    if (!enabled || !connected) return
+    if (!enabled || !connected || !shouldIndex) return
     const timer = setTimeout(() => void run(), INDEX_DELAY)
     return () => clearTimeout(timer)
-  }, [books, enabled, connected, run])
+  }, [books, enabled, connected, shouldIndex, run])
   useEffect(() => { if (connected) recheckSearchRemote() }, [connected])
 
   // 検索文のベクトル化と類似度の計算

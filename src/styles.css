@@ -77,6 +77,33 @@
 .video-unlike-btn { margin-left:6px; vertical-align:middle; border:0; border-radius:5px; padding:1px 6px; display:inline-flex; align-items:center; gap:3px; font-size:10px; font-weight:700; background:#fff0f1; color:#bd2435; }
 .video-unlike-btn svg { width:11px; height:11px; }
 .video-unlike-btn:hover, .video-unlike-btn:focus-visible { background:#bd2435; color:#fff; }
+.video-modal { width:min(1120px,100%); }
+.video-modal-body { display:grid; grid-template-columns:minmax(0,1fr) 300px; align-items:start; }
+.video-frame, .video-frame iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+.video-bookmarks { position:sticky; top:0; align-self:start; max-height:calc(92vh - 90px); overflow:auto; padding:20px 18px; border-left:1px solid var(--border); background:#fcfbfd; }
+.video-bookmarks-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.video-bookmarks h4 { margin:0; display:flex; align-items:center; gap:6px; font-size:14px; }
+.video-bookmarks h4 svg { width:16px; height:16px; color:var(--purple); }
+.video-bookmarks h4 span { font-size:11px; color:#fff; background:var(--purple); border-radius:10px; padding:0 7px; }
+.video-bookmark-add { margin-top:12px; width:100%; min-height:36px; border:1px dashed #c9bde0; border-radius:9px; background:#fff; color:var(--purple); font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:6px; }
+.video-bookmark-add:hover, .video-bookmark-add:focus-visible { background:#efe9fb; border-color:var(--purple); }
+.video-bookmark-add svg { width:15px; height:15px; }
+.video-bookmarks-hint { margin:6px 0 10px; font-size:10px; color:var(--muted); line-height:1.5; }
+.video-bookmarks-empty { font-size:12px; color:#99919d; text-align:center; padding:18px 0; }
+.video-bookmarks ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.video-bookmark { background:#fff; border:1px solid var(--border); border-radius:10px; padding:8px; }
+.video-bookmark-top { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+.video-bookmark-jump, .video-bookmark-delete { display:grid; place-items:center; width:24px; height:24px; padding:0; border:0; border-radius:6px; }
+.video-bookmark-jump { background:var(--purple); color:#fff; }
+.video-bookmark-jump svg { width:12px; height:12px; fill:currentColor; }
+.video-bookmark-delete { margin-left:auto; background:none; color:#a39bab; }
+.video-bookmark-delete:hover, .video-bookmark-delete:focus-visible { background:#fff0f1; color:#bd2435; }
+.video-bookmark-delete svg { width:14px; height:14px; }
+.video-bookmark-time { width:72px; height:24px; border:1px solid transparent; border-radius:6px; padding:0 6px; font-size:12px; font-weight:700; color:var(--purple); font-variant-numeric:tabular-nums; background:#f3effb; }
+.video-bookmark-time:focus { outline:0; border-color:#8256dd; background:#fff; }
+.video-bookmark textarea { width:100%; border:1px solid #ded8e6; border-radius:7px; padding:6px 8px; font-size:12px; line-height:1.5; resize:vertical; outline:0; }
+.video-bookmark textarea:focus { border-color:#8256dd; box-shadow:0 0 0 3px #8256dd18; }
+@media (max-width:800px) { .video-modal-body { grid-template-columns:1fr; } .video-bookmarks { position:static; max-height:none; border-left:0; border-top:1px solid var(--border); } }
 .video-detail { padding:24px; line-height:1.8; overflow-wrap:anywhere; }
 .video-detail-player { display:grid; max-width:560px; margin:0 auto; border-radius:12px; }
 .video-detail h4 { margin:20px 0 6px; }

@@ -273,19 +273,35 @@ function App() {
     return { key: filterKey, page: 1 }
   })
   useEffect(() => { try { localStorage.setItem(PAGE_KEY, JSON.stringify(paging)) } catch { /* noop */ } }, [paging])
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  // 「すべて」では本と動画を同じページに混ぜず、本のページのあとに動画のページを続ける（番号はそれぞれ1から）
+  const { listItems, pageGroups, pageRanges } = useMemo(() => {
+    const groups = contentType === 'all' ? [{ label: '本', items: filtered.filter(b => !isVideoItem(b)) }, { label: '動画', items: filtered.filter(isVideoItem) }].filter(g => g.items.length > 0) : []
+    if (groups.length === 0) groups.push({ label: '', items: filtered })
+    const ranges: PageRange[] = [], pageGroups: PagerGroup[] = []
+    let offset = 0
+    for (const g of groups) {
+      const count = Math.max(1, Math.ceil(g.items.length / PAGE_SIZE))
+      pageGroups.push({ label: g.label, first: ranges.length + 1, count })
+      for (let i = 0; i < count; i++) ranges.push({ start: offset + i * PAGE_SIZE, end: offset + Math.min(g.items.length, (i + 1) * PAGE_SIZE), groupStart: offset, label: g.label })
+      offset += g.items.length
+    }
+    return { listItems: groups.flatMap(g => g.items), pageGroups, pageRanges: ranges }
+  }, [filtered, contentType])
+  const pageCount = pageRanges.length
   if (paging.key !== filterKey) setPaging({ key: filterKey, page: 1 })
   const page = paging.key === filterKey ? Math.min(paging.page, pageCount) : 1
-  const pageStart = (page - 1) * PAGE_SIZE
-  const pageBooks = useMemo(() => filtered.slice(pageStart, pageStart + PAGE_SIZE), [filtered, pageStart])
+  const range = pageRanges[page - 1]
+  // 一覧の通し番号は、本・動画それぞれの中で1から数える
+  const noStart = range.start - range.groupStart
+  const pageBooks = useMemo(() => listItems.slice(range.start, range.end), [listItems, range])
   const headingRef = useRef<HTMLDivElement>(null)
   const filteredIds = useMemo(() => new Set(filtered.map(b => b.id)), [filtered])
   const paged = view !== 'map' && pageCount > 1
   const goPage = (next: number) => { setPaging({ key: filterKey, page: next }); headingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
   // 詳細画面で前後の本へ移る（表示中の絞り込み・並び順のとおり。別のページの本へ移ったら、一覧もそのページにする）
-  const editIndex = editing ? filtered.findIndex(b => b.id === editing.id) : -1
-  const bookNav = editIndex >= 0 ? { prev: filtered[editIndex - 1], next: filtered[editIndex + 1], index: editIndex, total: filtered.length } : undefined
-  const stepBook = (b: Book) => { const i = filtered.findIndex(x => x.id === b.id); if (i >= 0 && view !== 'map') setPaging({ key: filterKey, page: Math.floor(i / PAGE_SIZE) + 1 }) }
+  const editIndex = editing ? listItems.findIndex(b => b.id === editing.id) : -1
+  const bookNav = editIndex >= 0 ? { prev: listItems[editIndex - 1], next: listItems[editIndex + 1], index: editIndex, total: listItems.length } : undefined
+  const stepBook = (b: Book) => { const i = listItems.findIndex(x => x.id === b.id); if (i >= 0 && view !== 'map') setPaging({ key: filterKey, page: pageRanges.findIndex(r => i >= r.start && i < r.end) + 1 }) }
 
   const exportJson = () => {
     if (videoLibrary.storageError) { alert('動画データを読み込めないため、完全なバックアップを書き出せません。元の動画データを復元してから再試行してください。'); return }
@@ -334,15 +350,15 @@ function App() {
       </section>
       {semanticOn && query.trim() && <SemanticStatus semantic={semantic} query={query} ranked={Boolean(scores)} driveStatus={drive.status} debug={debug} onDebug={v => { setDebug(v); writeFlag(DEBUG_KEY, v) }} onConnect={() => void drive.connect()} />}
 
-      <div className="content-heading" ref={headingRef}><div><h2>{scores ? '意味の近い順' : contentType === 'youtube' ? 'すべての動画' : contentType === 'all' ? 'すべてのライブラリ' : 'すべての本'}</h2><span>{paged ? `${filtered.length}${contentType === 'book' ? '冊の本' : contentType === 'youtube' ? '本の動画' : '件のライブラリ'}のうち ${pageStart + 1}〜${pageStart + pageBooks.length}${contentType === 'book' ? '冊' : contentType === 'youtube' ? '本' : '件'}を表示` : `${filtered.length}${contentType === 'book' ? '冊の本' : contentType === 'youtube' ? '本の動画' : '件のライブラリ'}を表示`}</span></div><div className="heading-controls"><div className="view-switch type-switch" role="group" aria-label="コンテンツの種類">{(['all', 'book', 'youtube'] as const).map(t => <button key={t} className={contentType === t ? 'active' : ''} aria-pressed={contentType === t} onClick={() => { setContentType(t); setStatus('all') }}>{t === 'all' ? 'すべて' : t === 'book' ? '本' : 'YouTube'}</button>)}</div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}><MapIcon /> マップ</button></div></div></div>
+      <div className="content-heading" ref={headingRef}><div><h2>{scores ? '意味の近い順' : contentType === 'youtube' ? 'すべての動画' : contentType === 'all' ? 'すべてのライブラリ' : 'すべての本'}</h2><span>{paged ? `${filtered.length}${contentType === 'book' ? '冊の本' : contentType === 'youtube' ? '本の動画' : '件のライブラリ'}のうち ${range.label}${range.label ? ' ' : ''}${noStart + 1}〜${noStart + pageBooks.length}${contentType === 'book' || range.label === '本' ? '冊' : '本'}${range.label ? '目' : ''}を表示` : `${filtered.length}${contentType === 'book' ? '冊の本' : contentType === 'youtube' ? '本の動画' : '件のライブラリ'}を表示`}</span></div><div className="heading-controls"><div className="view-switch type-switch" role="group" aria-label="コンテンツの種類">{(['all', 'book', 'youtube'] as const).map(t => <button key={t} className={contentType === t ? 'active' : ''} aria-pressed={contentType === t} onClick={() => { setContentType(t); setStatus('all') }}>{t === 'all' ? 'すべて' : t === 'book' ? '本' : 'YouTube'}</button>)}</div><div className="view-switch"><button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}><Grid2X2 /> カード</button><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}><List /> リスト</button><button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}><MapIcon /> マップ</button></div></div></div>
 
-      {paged && <Pager page={page} pageCount={pageCount} onChange={goPage} />}
+      {paged && <Pager page={page} groups={pageGroups} onChange={goPage} />}
       {view === 'map' && displayedItems.length > 0 ? <Suspense fallback={<div className="book-map panel map-loading"><LoaderCircle className="spin" /> マップを準備しています…</div>}>
         <BookMap books={libraryItems} visibleIds={filteredIds} category={category} onCategory={setCategory} onSelect={openItem} driveStatus={drive.status} onConnect={() => void drive.connect()} />
       </Suspense> : filtered.length === 0 ? contentType === 'book' ? <Empty onAdd={() => openBook(emptyBook())} hasBooks={books.length > 0} /> : <div className="empty panel"><h2>{query || category !== 'all' ? '条件に合う項目がありません' : 'YouTubeと同期して、高評価動画を取り込みましょう'}</h2><p>動画の取得とAI解析は別々に実行できます。</p></div> : view === 'cards' ?
-        <div className="book-grid">{pageBooks.map((book, i) => 'type' in book && book.type === 'youtube' ? <VideoCard key={book.id} onUnlike={() => void videoLibrary.unlike(videoLibrary.videos.find(v => v.id === book.id)!)} busy={analysis.pending.has(book.id)} onAnalyze={() => void analysis.run(videoLibrary.videos.filter(v => v.id === book.id))} video={videoLibrary.videos.find(v => v.id === book.id)!} onOpen={() => setEditingVideo(book.id)} selected={selectedVideos.has(book.id)} onSelect={() => setSelectedVideos(s => { const next = new Set(s); if (next.has(book.id)) next.delete(book.id); else next.add(book.id); return next })} /> : <BookCard key={book.id} no={pageStart + i + 1} book={books.find(b => b.id === book.id) ?? book} score={debug ? scores?.get(book.id) : undefined} summary={summaryJobs.get(book.id)} issue={summaryIssues[book.id]} onCancelSummary={cancelSummary} onAutofill={startCoverAndSummary} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
-        <BookTable books={pageBooks} startNo={pageStart + 1} scores={debug ? scores : null} onSelect={openItem} />}
-      {paged && <Pager className="pager-bottom" page={page} pageCount={pageCount} onChange={goPage} />}
+        <div className="book-grid">{pageBooks.map((book, i) => isVideoItem(book) ? <VideoCard key={book.id} onUnlike={() => void videoLibrary.unlike(videoLibrary.videos.find(v => v.id === book.id)!)} busy={analysis.pending.has(book.id)} onAnalyze={() => void analysis.run(videoLibrary.videos.filter(v => v.id === book.id))} video={videoLibrary.videos.find(v => v.id === book.id)!} onOpen={() => setEditingVideo(book.id)} selected={selectedVideos.has(book.id)} onSelect={() => setSelectedVideos(s => { const next = new Set(s); if (next.has(book.id)) next.delete(book.id); else next.add(book.id); return next })} /> : <BookCard key={book.id} no={noStart + i + 1} book={books.find(b => b.id === book.id) ?? book} score={debug ? scores?.get(book.id) : undefined} summary={summaryJobs.get(book.id)} issue={summaryIssues[book.id]} onCancelSummary={cancelSummary} onAutofill={startCoverAndSummary} onClick={() => openBook(book)} onZoom={setZoomed} />)}</div> :
+        <BookTable books={pageBooks} startNo={noStart + 1} scores={debug ? scores : null} onSelect={openItem} />}
+      {paged && <Pager className="pager-bottom" page={page} groups={pageGroups} onChange={goPage} />}
     </main>
     <footer><span><img src="/favicon.svg" alt="" /> MyBooks</span><p>あなたの学びを、いつでもそばに。</p></footer>
     {notices.length > 0 && <div className="notices" role="status">{notices.map(n => <p key={n.id} className={n.error ? 'error' : undefined}>{n.error ? <CloudAlert /> : <Check />}{n.text}<button type="button" aria-label="閉じる" onClick={() => setNotices(list => list.filter(x => x.id !== n.id))}><X /></button></p>)}</div>}
@@ -741,38 +757,53 @@ function splitCsv(line: string) { const values: string[] = []; let value = '', q
 // 「表示名::URL」を | で区切る。以前の「種類::表示名::URL」形式も読み込める
 function parseCsvLinks(value: string): BookLink[] { return value.split('|').map(v => v.trim()).filter(Boolean).map((entry, i) => { const parts = entry.split('::'); const url = parts.at(-1) ?? ''; const label = parts.length > 1 ? parts.at(-2) ?? '' : ''; return { id: `${crypto.randomUUID()}-${i}`, label, url } }).filter(l => l.url) }
 
+/** 一覧のページ（itemsでの範囲と、そのページが属するまとまり） */
+interface PageRange { start: number; end: number; groupStart: number; label: string }
+/** ページ送りの段のまとまり（「すべて」では本と動画）。ページ番号は first から count ページ分で、表示は1から数える */
+interface PagerGroup { label: string; first: number; count: number }
+const isVideoItem = (b: Book) => 'type' in b && b.type === 'youtube'
+
 /** 1段に並べるページ番号の上限 */
 const PAGER_ROW_MAX = 20
-/** 一覧のページ送り（前後ボタンとページ番号。1段に入りきらないときは2段に折り返し、それでも入りきらないときだけ途中を省略） */
-function Pager({ page, pageCount, onChange, className }: { page: number; pageCount: number; onChange: (page: number) => void; className?: string }) {
+/** ページ送り。本と動画のようにまとまりがあるときは、まとまりごとのページ送りを上下に重ねる（番号はそれぞれ1から） */
+function Pager({ page, groups, onChange, className }: { page: number; groups: PagerGroup[]; onChange: (page: number) => void; className?: string }) {
+  return <div className={className ? `pager-stack ${className}` : 'pager-stack'}>{groups.map(g => {
+    const inGroup = page >= g.first && page < g.first + g.count
+    return <GroupPager key={g.first} label={g.label} page={inGroup ? page - g.first + 1 : 0} pageCount={g.count} onChange={n => onChange(g.first + n - 1)} />
+  })}</div>
+}
+
+/** 1つのまとまりのページ送り（前後ボタンとページ番号。1段に入りきらないときは2段に折り返し、それでも入りきらないときだけ途中を省略）。page が0なら選択中のページなし */
+function GroupPager({ label, page, pageCount, onChange }: { label: string; page: number; pageCount: number; onChange: (page: number) => void }) {
   const ref = useRef<HTMLElement>(null)
   const measureRef = useRef<HTMLDivElement>(null)
   const [perRow, setPerRow] = useState(0)
-  // 前後ボタンとページ番号を見えない所に並べて幅を測り、1段に置ける番号の数を求める
+  // 前後ボタン・見出し・ページ番号を見えない所に並べて幅を測り、1段に置ける番号の数を求める
   useLayoutEffect(() => {
     const nav = ref.current, measure = measureRef.current; if (!nav || !measure) return
     const check = () => {
-      const buttons = [...measure.children] as HTMLElement[]
+      const buttons = [...measure.querySelectorAll('button')] as HTMLElement[]
+      const labelEl = measure.querySelector('.pager-label') as HTMLElement | null
       if (buttons.length < 3) return
       const gap = parseFloat(getComputedStyle(nav).columnGap) || 0
-      const arrows = buttons[0].offsetWidth + buttons[buttons.length - 1].offsetWidth + gap * 2
+      const fixed = buttons[0].offsetWidth + buttons[buttons.length - 1].offsetWidth + gap * 2 + (labelEl ? labelEl.offsetWidth + gap : 0)
       const pitch = Math.max(...buttons.slice(1, -1).map(b => b.offsetWidth)) + gap
-      setPerRow(Math.min(PAGER_ROW_MAX, Math.max(1, Math.floor((nav.clientWidth - arrows + gap) / pitch))))
+      setPerRow(Math.min(PAGER_ROW_MAX, Math.max(1, Math.floor((nav.clientWidth - fixed + gap) / pitch))))
     }
     const observer = new ResizeObserver(check)
     observer.observe(nav); check()
     return () => observer.disconnect()
-  }, [pageCount])
+  }, [pageCount, label])
   const all = Array.from({ length: pageCount }, (_, i) => i + 1)
   const fits = perRow > 0 && pageCount <= perRow * 2
   const numbers = fits ? all : all.filter(n => n === 1 || n === pageCount || Math.abs(n - page) <= 2)
   const rows = fits ? Array.from({ length: Math.ceil(pageCount / perRow) }, (_, i) => all.slice(i * perRow, (i + 1) * perRow)) : [numbers]
-  const button = (n: number) => <button key={n} className={n === page ? 'active' : ''} aria-current={n === page ? 'page' : undefined} onClick={() => onChange(n)}>{n}</button>
-  return <nav className={className ? `pager ${className}` : 'pager'} ref={ref} aria-label="ページ送り">
-    <button disabled={page === 1} onClick={() => onChange(page - 1)} aria-label="前のページ"><ChevronLeft /></button>
-    <div className="pager-rows">{rows.map((row, r) => <div key={r} className="pager-row">{row.map((n, i) => fits ? button(n) : <span key={n} className="pager-item">{i > 0 && n - row[i - 1] > 1 && <span className="pager-gap">…</span>}{button(n)}</span>)}</div>)}</div>
-    <button disabled={page === pageCount} onClick={() => onChange(page + 1)} aria-label="次のページ"><ChevronRight /></button>
-    <div className="pager pager-measure" ref={measureRef} aria-hidden="true"><button tabIndex={-1}><ChevronLeft /></button>{[1, pageCount].map((n, i) => <button key={i} tabIndex={-1}>{n}</button>)}<button tabIndex={-1}><ChevronRight /></button></div>
+  return <nav className="pager" ref={ref} aria-label={label ? `${label}のページ送り` : 'ページ送り'}>
+    {label && <span className="pager-label">{label}</span>}
+    <button disabled={page <= 1} onClick={() => onChange(page - 1)} aria-label="前のページ"><ChevronLeft /></button>
+    <div className="pager-rows">{rows.map((row, r) => <div key={r} className="pager-row">{row.map((n, i) => <span key={n} className="pager-item">{i > 0 && n - row[i - 1] > 1 && <span className="pager-gap">…</span>}<button className={n === page ? 'active' : ''} aria-current={n === page ? 'page' : undefined} aria-label={label ? `${label}の${n}ページ` : undefined} onClick={() => onChange(n)}>{n}</button></span>)}</div>)}</div>
+    <button disabled={page === 0 || page === pageCount} onClick={() => onChange(page + 1)} aria-label="次のページ"><ChevronRight /></button>
+    <div className="pager pager-measure" ref={measureRef} aria-hidden="true">{label && <span className="pager-label">{label}</span>}<button tabIndex={-1}><ChevronLeft /></button>{[1, pageCount].map((n, i) => <button key={i} tabIndex={-1}>{n}</button>)}<button tabIndex={-1}><ChevronRight /></button></div>
   </nav>
 }
 

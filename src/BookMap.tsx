@@ -321,18 +321,36 @@ function MapTooltip({ point, pos, size, touch }: { point: Point; pos: { x: numbe
   const parent = categories.find(c => c.id === child?.parent)
   const memo = book.memo.trim()
   const video = isVideo(book)
-  // 動画はサムネイルが横長なので、ツールチップも少し広げて要約をサムネイルの下まで使う
+  // 動画はサムネイルが横長なので、ツールチップも少し広げる
   const width = Math.min(video ? 340 : 300, size.w - 24)
   const left = pos.x + 16 + width > size.w ? Math.max(8, pos.x - 16 - width) : pos.x + 16
-  const top = Math.min(Math.max(8, pos.y - 40), Math.max(8, size.h - 190))
+  const top = Math.min(Math.max(8, pos.y - 40), Math.max(8, size.h - 240))
+  // 表紙・サムネイルは左に回り込ませ、その下のスペースまで文章を流す
   return <div className={`map-tooltip${video ? ' video' : ''}`} style={{ left, top, width }}>
     <div className="map-tooltip-cover"><CoverImage src={book.cover} alt="" width={200} fallback={<BookOpen />} /></div>
-    <div className="map-tooltip-body">
-      <div className="category-line"><i style={{ background: point.color }} />{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div>
-      <strong>{video ? '▶ ' : '📕 '}{book.title}</strong>
-      <p>{memo ? (memo.length > 100 ? `${memo.slice(0, 100)}…` : memo) : '要約は未登録です'}</p>
+    <div className="category-line"><i style={{ background: point.color }} />{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div>
+    <strong>{video ? '▶ ' : '📕 '}{book.title}</strong>
+    <p>{memo ? (memo.length > 100 ? `${memo.slice(0, 100)}…` : memo) : '要約は未登録です'}</p>
+    <AxisMeters x={point.x} y={point.y} />
+    <div className="map-tooltip-foot">
       <span className={`status mini ${statusClass[book.status]}`}>{video ? (book.memo ? 'AI解析済み' : 'AI未解析') : book.status}</span>
       {touch && <small className="map-tooltip-hint">もう一度タップで詳細を開く</small>}
     </div>
+  </div>
+}
+
+/**
+ * マップ上の位置を、四辺のラベルに対する割合（%）で示す。
+ * 中央が50%で、端（広がりの -1〜1）に近いほどその側の割合が大きくなる
+ */
+function AxisMeters({ x, y }: { x: number; y: number }) {
+  const pct = (v: number) => Math.round(Math.max(0, Math.min(1, (v + 1) / 2)) * 100)
+  const rows = [{ left: '社会', right: '技術', value: pct(x) }, { left: '抽象', right: '具体', value: pct(-y) }]
+  return <div className="map-tooltip-axes">
+    {rows.map(r => <div key={r.left} title={`${r.left} ${100 - r.value}% ・ ${r.right} ${r.value}%`}>
+      <span className={r.value < 50 ? 'strong' : ''}>{r.left} {100 - r.value}%</span>
+      <i><b style={{ left: `${r.value}%` }} /></i>
+      <span className={r.value > 50 ? 'strong' : ''}>{r.value}% {r.right}</span>
+    </div>)}
   </div>
 }

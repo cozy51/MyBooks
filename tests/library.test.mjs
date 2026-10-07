@@ -54,6 +54,14 @@ test('video summaries drop the fixed metadata disclaimer', () => {
  const copied = videoText.videoCopyText({ title: 'T', videoUrl: 'https://www.youtube.com/watch?v=x', summary: 'タイトルと概要欄に基づく整理。S', keyPoints: ['a', 'b'] })
  assert.equal(copied, 'T\n\nhttps://www.youtube.com/watch?v=x\n\nS\n\n重要ポイント\n・a\n・b')
 })
+test('video durations are shown in Japanese', () => {
+ assert.equal(videoText.formatDuration('PT1H2M3S'), '1時間2分')
+ assert.equal(videoText.formatDuration('PT28M32S'), '28分32秒')
+ assert.equal(videoText.formatDuration('PT45S'), '45秒')
+ assert.equal(videoText.formatDuration('P1DT2H'), '26時間0分')
+ assert.equal(videoText.formatDuration(''), '')
+ assert.equal(videoText.formatDuration('P0D'), '')
+})
 test('candidate pool retains both media and ranking still includes keyword matches', () => {
  const books = Array.from({ length: 20 }, (_, i) => ({ ...book, id: `book-${i}` }))
  const v = library.videoItem(video())

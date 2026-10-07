@@ -63,6 +63,8 @@
 .video-analyze:disabled { cursor:default; }
 .video-analyze.done { background:#dff2ce; color:#2f6b29; }
 .video-analyze:disabled:not(.done) { opacity:.6; }
+.video-foot { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.video-duration { color:#776884; font-variant-numeric:tabular-nums; }
 .video-excerpt { margin:0 0 8px; min-height:calc(12px * 1.7 * 3); display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; font-size:12px; line-height:1.7; color:#71647e; }
 .video-actions { margin:10px 0 8px; font-size:11px; white-space:nowrap; }
 .video-actions > div { display:flex; align-items:center; gap:6px; }

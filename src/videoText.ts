@@ -5,3 +5,11 @@ export const videoCopyText = (v: YouTubeVideo) => [
   v.title, v.videoUrl, cleanSummary(v.summary),
   v.keyPoints?.length ? `重要ポイント\n${v.keyPoints.map(p => `・${p}`).join('\n')}` : '',
 ].filter(Boolean).join('\n\n')
+/** ISO 8601 duration from the YouTube API (e.g. PT1H2M3S) → 「1時間2分」「28分32秒」. */
+export function formatDuration(iso = '') {
+  const m = /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(iso)
+  if (!m) return ''
+  const [d, h, min, s] = m.slice(1).map(x => Number(x || 0)), hours = d * 24 + h
+  if (!hours && !min && !s) return '' // live streams report P0D
+  return hours ? `${hours}時間${min}分` : min ? `${min}分${s}秒` : `${s}秒`
+}

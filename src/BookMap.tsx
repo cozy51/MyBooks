@@ -20,13 +20,15 @@ const isVideo = (book: Book) => 'type' in book && book.type === 'youtube'
 /** 意味軸スコア [横, 縦]。横は +1 に近いほど技術寄り、縦は +1 に近いほど実践寄り */
 type AxisScore = [number, number]
 interface Point { book: Book; x: number; y: number; color: string; active: boolean; axis?: AxisScore }
-/** 近さで配置（UMAP）／意味軸で配置（意味軸スコアをそのまま座標にする） */
+/** 意味軸で配置（意味軸スコアをそのまま座標にする）／意味の近さで配置（UMAP） */
 type MapMode = 'similar' | 'axes'
-const MODE_KEY = 'mybooks-map-mode'
-const readMode = (): MapMode => { try { return localStorage.getItem(MODE_KEY) === 'axes' ? 'axes' : 'similar' } catch { return 'similar' } }
+// 既定を「意味軸で配置」に変えたため、以前の選択は引き継がずキーを改める
+const MODE_KEY = 'mybooks-map-mode-v2'
+// 既定は「意味軸で配置」。「意味の近さで配置」を選んだときだけ記憶して次回も使う
+const readMode = (): MapMode => { try { return localStorage.getItem(MODE_KEY) === 'similar' ? 'similar' : 'axes' } catch { return 'axes' } }
 
 /**
- * 「近さで配置」で、分類ごとの重心を置く画面上のおおよその向き（画面のyは下向きが正）。
+ * 「意味の近さで配置」で、分類ごとの重心を置く画面上のおおよその向き（画面のyは下向きが正）。
  * UMAPの配置は回転・反転しても意味が変わらず、計算し直すたびに向きが変わるため、
  * 再計算しても見慣れた向きで表示されるよう、この向きに最も近くなるように配置を回転・反転する。
  * 座標そのものに意味を持たせるものではない（意味で見るときは「意味軸で配置」を使う）。
@@ -120,8 +122,8 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
       </div>
       <div className="map-actions">
         <div className="view-switch map-mode" role="group" aria-label="マップの配置方法">
-          <button className={mode === 'similar' ? 'active' : ''} aria-pressed={mode === 'similar'} onClick={() => setMode('similar')} title="内容が似ている本・動画を近くに置きます">近さで配置</button>
-          <button className={mode === 'axes' ? 'active' : ''} aria-pressed={mode === 'axes'} onClick={() => setMode('axes')} title="横を『社会 ↔ 技術』、縦を『理論 ↔ 実践』の意味軸スコアで置きます">意味軸で配置</button>
+          <button className={mode === 'axes' ? 'active' : ''} aria-pressed={mode === 'axes'} onClick={() => setMode('axes')} title="意味軸：指定した2軸で配置します。横を『社会 ↔ 技術』、縦を『理論 ↔ 実践』の意味軸スコアで置きます">意味軸で配置</button>
+          <button className={mode === 'similar' ? 'active' : ''} aria-pressed={mode === 'similar'} onClick={() => setMode('similar')} title="意味の近さ：内容が似ている本・動画を近くに配置します">意味の近さで配置</button>
         </div>
         {mode === 'similar' && <button className="secondary-btn map-relayout" disabled={busy || points.length === 0} onClick={relayout} title="すべての本の配置をUMAPで計算し直します"><RefreshCw /> 配置を再計算</button>}
       </div>

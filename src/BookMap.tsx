@@ -13,6 +13,7 @@ const DIM_COLOR = '#d9d4e0'
 const parents = categories.filter(c => !c.parent)
 const parentOf = (categoryId: string) => { const c = categories.find(c => c.id === categoryId); return c?.parent ?? c?.id ?? '' }
 const MIN_ZOOM = 0.5, MAX_ZOOM = 80
+const isVideo = (book: Book) => 'type' in book && book.type === 'youtube'
 
 interface Point { book: Book; x: number; y: number; color: string; active: boolean }
 interface View { k: number; tx: number; ty: number }
@@ -60,7 +61,7 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
     <div className="map-foot">
       {busy ? <span className="map-progress"><LoaderCircle className="spin" />{progressLabel(progress)}{progress.total ? <progress value={progress.done} max={progress.total} /> : null}</span>
         : <span>{activeCount === points.length ? `${points.length}件を配置` : `${points.length}件中 ${activeCount}件が条件に一致`}{untitled > 0 && `・タイトルのない${untitled}冊は対象外`}{pending > 0 && `・未計算 ${pending}冊`}</span>}
-      <span className="map-note">● 本・▶ 動画。位置はタイトルと要約の内容の近さ、色は分類を表します。軸は厳密な意味を持ちませんが、横方向は『社会 ↔ 技術』、縦方向は『抽象 ↔ 具体』の傾向として見ることができます。</span>
+      <span className="map-note">● 本・■ 動画。位置はタイトルと要約の内容の近さ、色は分類を表します。軸は厳密な意味を持ちませんが、横方向は『社会 ↔ 技術』、縦方向は『抽象 ↔ 具体』の傾向として見ることができます。</span>
     </div>
     {error && <div className="map-error" role="alert"><p>{error.message}</p>{error.code === 'unauthorized' && driveStatus !== 'unavailable' && <button className="primary-btn" onClick={onConnect}><Cloud /> Googleでログインして接続</button>}</div>}
     {!error && driveError && <p className="map-drive-note">マップのデータをGoogle Driveに保存できませんでした（このブラウザには保存済み）：{driveError}</p>}
@@ -145,7 +146,8 @@ function MapCanvas({ points, onSelect }: { points: Point[]; onSelect: (book: Boo
       if (s.x < -10 || s.y < -10 || s.x > size.w + 10 || s.y > size.h + 10) continue
       if (p.active) onScreen.push({ p, ...s })
       ctx.beginPath()
-      if ('type' in p.book && p.book.type === 'youtube') { const radius = p.active ? r : r * 0.6; ctx.moveTo(s.x + radius, s.y); ctx.lineTo(s.x - radius, s.y - radius); ctx.lineTo(s.x - radius, s.y + radius); ctx.closePath() } else ctx.arc(s.x, s.y, p.active ? r : r * 0.6, 0, Math.PI * 2)
+      // 動画は円と同じくらいの面積に見える四角で描く
+      if (isVideo(p.book)) { const half = (p.active ? r : r * 0.6) * 0.89; ctx.rect(s.x - half, s.y - half, half * 2, half * 2) } else ctx.arc(s.x, s.y, p.active ? r : r * 0.6, 0, Math.PI * 2)
       ctx.fillStyle = p.active ? p.color : DIM_COLOR
       ctx.fill()
       if (p.active) { ctx.lineWidth = 1.5; ctx.strokeStyle = '#ffffff'; ctx.stroke() }
@@ -166,7 +168,8 @@ function MapCanvas({ points, onSelect }: { points: Point[]; onSelect: (book: Boo
     }
     if (shownHover) {
       const s = toScreen(shownHover, view)
-      ctx.beginPath(); ctx.arc(s.x, s.y, r + 4, 0, Math.PI * 2)
+      ctx.beginPath()
+      if (isVideo(shownHover.book)) { const half = (r + 4) * 0.89; ctx.rect(s.x - half, s.y - half, half * 2, half * 2) } else ctx.arc(s.x, s.y, r + 4, 0, Math.PI * 2)
       ctx.fillStyle = shownHover.color; ctx.fill()
       ctx.lineWidth = 3; ctx.strokeStyle = '#5c22d4'; ctx.stroke()
     }
@@ -285,7 +288,7 @@ function MapTooltip({ point, pos, size, touch }: { point: Point; pos: { x: numbe
   const left = pos.x + 16 + width > size.w ? Math.max(8, pos.x - 16 - width) : pos.x + 16
   const top = Math.min(Math.max(8, pos.y - 40), Math.max(8, size.h - 190))
   return <div className="map-tooltip" style={{ left, top, width }}>
-    <div className="map-tooltip-cover"><CoverImage src={book.cover} alt="" width={200} fallback={<BookOpen />} /></div>
+    <div className={`map-tooltip-cover${isVideo(book) ? ' video' : ''}`}><CoverImage src={book.cover} alt="" width={200} fallback={<BookOpen />} /></div>
     <div className="map-tooltip-body">
       <div className="category-line"><i style={{ background: point.color }} />{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div>
       <strong>{'type' in book && book.type === 'youtube' ? '▶ ' : '📕 '}{book.title}</strong>

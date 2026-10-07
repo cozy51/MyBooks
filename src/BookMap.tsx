@@ -16,6 +16,44 @@ const MIN_ZOOM = 0.5, MAX_ZOOM = 80
 const isVideo = (book: Book) => 'type' in book && book.type === 'youtube'
 
 interface Point { book: Book; x: number; y: number; color: string; active: boolean }
+
+/**
+ * 分類ごとの重心を置きたい画面上の向き（右が「技術」、上が「具体」。画面のyは下向きが正）。
+ * UMAPの配置は回転・反転しても意味が変わらず、計算し直すたびに向きが変わるため、
+ * 四辺のラベルと合うよう、この向きに最も近くなるように配置を回転・反転して表示する。
+ */
+const AXIS_TARGETS: Record<string, [number, number]> = { a: [1, -1], b: [0.3, -1], c: [1, 0.3], d: [0.5, 0.6], e: [-1, 1], f: [-1, 0] }
+
+/** 配置を回転・反転して向きをそろえ、中心0・広がりがおおむね -1〜1 になるよう縮尺を合わせ直す */
+function orientLayout(items: { x: number; y: number; group: string; anchor: boolean }[]): [number, number][] {
+  if (items.length < 4) return items.map(p => [p.x, p.y])
+  const mx = items.reduce((t, p) => t + p.x, 0) / items.length, my = items.reduce((t, p) => t + p.y, 0) / items.length
+  const sums = new Map<string, { x: number; y: number; n: number }>()
+  for (const p of items) {
+    if (!p.anchor || !AXIS_TARGETS[p.group]) continue
+    const s = sums.get(p.group) ?? { x: 0, y: 0, n: 0 }
+    s.x += p.x - mx; s.y += p.y - my; s.n++; sums.set(p.group, s)
+  }
+  // 冊数の多い分類に引っ張られないよう、分類ごとの重心を同じ重みで扱う
+  const fit = (flip: number) => {
+    let a = 0, b = 0
+    for (const [g, s] of sums) {
+      if (s.n < 3) continue
+      const cx = s.x / s.n, cy = flip * s.y / s.n, [tx, ty] = AXIS_TARGETS[g]
+      a += cx * tx + cy * ty; b += cx * ty - cy * tx
+    }
+    return { flip, angle: Math.atan2(b, a), score: Math.hypot(a, b) }
+  }
+  const plain = fit(1), flipped = fit(-1)
+  const { flip, angle } = flipped.score > plain.score ? flipped : plain
+  const cos = Math.cos(angle), sin = Math.sin(angle)
+  const rotated = items.map(p => { const x = p.x - mx, y = flip * (p.y - my); return [x * cos - y * sin, x * sin + y * cos] as [number, number] })
+  // 回転で四隅にはみ出した分を、外れ値を除いた範囲で縮尺し直す
+  const range = (values: number[]) => { const v = [...values].sort((a, b) => a - b), q = (r: number) => v[Math.round((v.length - 1) * r)]; return v.length >= 50 ? [q(0.02), q(0.98)] : [v[0], v[v.length - 1]] }
+  const [x0, x1] = range(rotated.map(c => c[0])), [y0, y1] = range(rotated.map(c => c[1]))
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, span = Math.max(x1 - x0, y1 - y0) / 2 || 1
+  return rotated.map(([x, y]) => [(x - cx) / span, (y - cy) / span])
+}
 interface View { k: number; tx: number; ty: number }
 
 export default function BookMap({ books, visibleIds, category, onCategory, onSelect, driveStatus, onConnect }: {
@@ -32,12 +70,10 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
 
   const points = useMemo<Point[]>(() => {
     if (!cache) return []
-    const list: Point[] = []
-    for (const book of books) {
-      const p = cache.layout[book.id]
-      if (!p || !embedText(book)) continue
-      list.push({ book, x: p[0], y: p[1], color: PARENT_COLORS[parentOf(book.categoryId)] ?? OTHER_COLOR, active: visibleIds.has(book.id) })
-    }
+    const placed = books.flatMap(book => { const p = cache.layout[book.id]; return p && embedText(book) ? [{ book, x: p[0], y: p[1], group: parentOf(book.categoryId), anchor: !isVideo(book) }] : [] })
+    // 向きの基準には本だけを使う（動画は分類の付き方が本と異なるため）
+    const coords = orientLayout(placed)
+    const list: Point[] = placed.map(({ book, group }, i) => ({ book, x: coords[i][0], y: coords[i][1], color: PARENT_COLORS[group] ?? OTHER_COLOR, active: visibleIds.has(book.id) }))
     // 薄い点を先に描き、絞り込みに合う点を上に重ねる
     return list.sort((a, b) => Number(a.active) - Number(b.active))
   }, [books, cache, visibleIds])

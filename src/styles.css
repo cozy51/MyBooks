@@ -122,3 +122,7 @@
 .toolbar .search { flex:1 1 320px; min-width:0; }
 .toolbar select { flex:1 1 150px; max-width:260px; }
 .toolbar > button { flex:0 0 auto; }
+/* 表示する種類（すべて・本・YouTube）は、カード・リスト・マップの切り替えと並べて置く */
+.heading-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.view-switch.type-switch button{font-size:13px;padding:8px 12px}
+@media(max-width:650px){.content-heading{flex-wrap:wrap;gap:10px}.view-switch.type-switch button{padding:8px 10px}}

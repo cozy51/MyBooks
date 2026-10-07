@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ExternalLink, Play, Sparkles, ThumbsUp, Tv, X } from 'lucide-react'
+import { Bookmark, ExternalLink, Play, Sparkles, ThumbsUp, Tv, X } from 'lucide-react'
 import { categories } from './data'
 import type { VideoBookmark, YouTubeVideo } from './types'
 import { loadYouTubeApi, type PlayerHandle, type YTPlayer } from './youtubePlayer'
@@ -35,7 +35,7 @@ export function VideoCard({ video, onOpen, selected, onSelect, onAnalyze, onUnli
   const category = categories.find(c => c.id === (video.subCategory || video.category))
   return <article className="book-card video-card" tabIndex={0} onClick={onOpen} onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget) onOpen() }}>
     <VideoPlayer video={video} />
-    <div className="card-body"><div className="category-line"><b>{category?.name || '未分類'}</b></div>
+    <div className="card-body"><div className="category-line"><b>{!!video.bookmarks?.length && <span className="video-bookmarked" title={`ブックマーク ${video.bookmarks.length}件`} aria-label={`ブックマーク ${video.bookmarks.length}件`}><Bookmark />{video.bookmarks.length}</span>}{category?.name || '未分類'}</b></div>
       <div className="video-title"><input type="checkbox" className="video-check" aria-label={`${video.title}を選択`} checked={selected} onClick={e => e.stopPropagation()} onChange={onSelect} /><h3>{video.title}</h3></div>
       <p className="author">{video.channelTitle}</p>
       <div className="video-actions"><div><button type="button" className={`video-analyze${video.analyzedAt ? ' done' : ''}`} disabled={busy || !!video.analyzedAt || !onAnalyze} onClick={e => { e.stopPropagation(); onAnalyze?.() }}><Sparkles size={12} />{busy ? '解析中…' : video.analyzedAt ? 'AI解析済み' : 'AI解析'}</button>{video.summary && <CopyButton text={videoCopyText(video)} title="タイトル・URL・AI要約・重要ポイントをコピー" />}<a className="video-open" href={video.videoUrl} target="_blank" rel="noopener noreferrer" aria-label="YouTubeで見る" title="YouTubeで見る" onClick={e => e.stopPropagation()}><ExternalLink size={14} /></a>{onUnlike && <button type="button" className="video-unlike" aria-label="YouTubeのいいねを解除" title="YouTubeのいいねを解除" onClick={e => { e.stopPropagation(); onUnlike() }}><ThumbsUp /></button>}</div></div>

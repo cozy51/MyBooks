@@ -23,7 +23,7 @@
 - `VITE_GOOGLE_CLIENT_ID` に既存のOAuthクライアントIDを設定します。
 - 承認済みのJavaScript生成元に、実際に利用するアプリの生成元を追加します。ローカル開発なら `http://localhost:5173` などです。テスト用ポートを実運用の設定に追加する必要はありません。
 - Driveのフォルダ許可は従来のGoogle Picker設定を再利用します。`VITE_GOOGLE_API_KEY`、`VITE_GOOGLE_APP_ID` が必要です。
-- サーバー側ログイン更新を使う場合は既存の `GOOGLE_CLIENT_SECRET` / `SESSION_SECRET` を利用します。YouTube権限は同期操作から追加します。未設定ならセッション中のGISアクセストークンを使用します。
+- サーバー側ログイン更新を使う場合は既存の `GOOGLE_CLIENT_SECRET` / `SESSION_SECRET` を利用します。Driveの保存は `drive.file` を要求し、YouTube権限とは別に認証します。YouTubeは同期操作時だけ `youtube.readonly` をGISのトークン方式で要求します。両方式で `include_granted_scopes: false` とし、許可済みの他サービスの権限を結合しません。YouTubeトークンはセッション中だけ保持し、期限切れ後の同期操作で再取得します。Driveのトークン・更新用CookieはYouTube認証で上書きしません。全ページスキャンの読み取り権限は従来どおり、その操作時だけ追加します。
 
 ## AIと情報の範囲
 

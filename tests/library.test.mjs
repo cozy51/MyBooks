@@ -62,6 +62,17 @@ test('video durations are shown in Japanese', () => {
  assert.equal(videoText.formatDuration(''), '')
  assert.equal(videoText.formatDuration('P0D'), '')
 })
+test('unliked videos stay hidden across merges and come back only when liked again', () => {
+ const gone = video(undefined, { unlikedAt: '2026-10-05T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z' })
+ assert.equal(library.validateVideos([gone])[0].unlikedAt, '2026-10-05T00:00:00Z')
+ assert.throws(() => library.validateVideos([video(undefined, { unlikedAt: 'bad' })]))
+ assert.ok(library.mergeVideoLibraries([video()], [gone])[0].unlikedAt)
+ assert.ok(library.mergeVideoLibraries([gone], [video()])[0].unlikedAt)
+ const relike = library.appendVideos([gone], [video()])
+ assert.equal(relike.videos.length, 1); assert.equal(relike.videos[0].unlikedAt, undefined); assert.equal(relike.added, 1)
+ assert.ok(relike.videos[0].updatedAt > gone.updatedAt)
+ assert.equal(library.appendVideos([gone], []).videos[0].unlikedAt, gone.unlikedAt)
+})
 test('candidate pool retains both media and ranking still includes keyword matches', () => {
  const books = Array.from({ length: 20 }, (_, i) => ({ ...book, id: `book-${i}` }))
  const v = library.videoItem(video())

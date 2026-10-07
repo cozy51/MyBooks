@@ -71,6 +71,12 @@
 .video-detail h4 .copy-mini, .video-detail > .copy-mini { margin-left:6px; vertical-align:middle; }
 .video-open { display:grid; place-items:center; width:22px; height:22px; border-radius:6px; color:#5b21d2; }
 .video-open:hover, .video-open:focus-visible { background:#eee8fc; }
+.video-unlike { display:grid; place-items:center; width:22px; height:22px; padding:0; border:0; border-radius:6px; background:none; color:#5b21d2; }
+.video-unlike svg { width:14px; height:14px; fill:currentColor; }
+.video-unlike:hover, .video-unlike:focus-visible { background:#fff0f1; color:#bd2435; }
+.video-unlike-btn { margin-left:6px; vertical-align:middle; border:0; border-radius:5px; padding:1px 6px; display:inline-flex; align-items:center; gap:3px; font-size:10px; font-weight:700; background:#fff0f1; color:#bd2435; }
+.video-unlike-btn svg { width:11px; height:11px; }
+.video-unlike-btn:hover, .video-unlike-btn:focus-visible { background:#bd2435; color:#fff; }
 .video-detail { padding:24px; line-height:1.8; overflow-wrap:anywhere; }
 .video-detail-player { display:grid; max-width:560px; margin:0 auto; border-radius:12px; }
 .video-detail h4 { margin:20px 0 6px; }

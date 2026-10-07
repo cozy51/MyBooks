@@ -18,6 +18,10 @@ const READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
 const READ_TOKEN_KEY = 'mybooks-drive-read-token'
 export const YOUTUBE_SCOPE = 'https://www.googleapis.com/auth/youtube.readonly'
 const YOUTUBE_TOKEN_KEY = 'mybooks-youtube-token'
+/** いいね解除のときだけ求める書き込み権限（同期は読み取り専用のまま） */
+const YOUTUBE_WRITE_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl'
+const YOUTUBE_WRITE_TOKEN_KEY = 'mybooks-youtube-write-token'
+const isYouTubeKey = (key?: string) => key === YOUTUBE_TOKEN_KEY || key === YOUTUBE_WRITE_TOKEN_KEY
 const API = 'https://www.googleapis.com/drive/v3/files'
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files'
 
@@ -91,16 +95,18 @@ export const storedReadToken = () => savedToken(READ_TOKEN_KEY)
 
 export const storedYouTubeToken = () => savedToken(YOUTUBE_TOKEN_KEY)
 export function clearYouTubeToken() { sessionStorage.removeItem(YOUTUBE_TOKEN_KEY) }
+export const storedYouTubeWriteToken = () => savedToken(YOUTUBE_WRITE_TOKEN_KEY)
+export function clearYouTubeWriteToken() { sessionStorage.removeItem(YOUTUBE_WRITE_TOKEN_KEY) }
 
-export function clearToken() { try { sessionStorage.removeItem(YOUTUBE_TOKEN_KEY); sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(READ_TOKEN_KEY) } catch { /* noop */ } }
+export function clearToken() { try { sessionStorage.removeItem(YOUTUBE_TOKEN_KEY); sessionStorage.removeItem(YOUTUBE_WRITE_TOKEN_KEY); sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(READ_TOKEN_KEY) } catch { /* noop */ } }
 
 /** 受け取ったトークンを保存する（読み取り専用の権限も含んでいれば、要約用のトークンとしても使う） */
 function saveToken(token: string, expiresIn: number | undefined, scope: string | undefined, key?: string) {
   const value = JSON.stringify({ token, expiresAt: Date.now() + (expiresIn ?? 3600) * 1000 })
   // YouTubeのトークンはDriveの保存・自動更新・通知に使用しない。
-  const keys = key === YOUTUBE_TOKEN_KEY ? [YOUTUBE_TOKEN_KEY] : [TOKEN_KEY, ...(scope?.split(' ').includes(READ_SCOPE) ? [READ_TOKEN_KEY] : []), ...(key ? [key] : [])]
+  const keys = isYouTubeKey(key) ? [key!] : [TOKEN_KEY, ...(scope?.split(' ').includes(READ_SCOPE) ? [READ_TOKEN_KEY] : []), ...(key ? [key] : [])]
   try { for (const k of keys) sessionStorage.setItem(k, value) } catch { /* noop */ }
-  if (key !== YOUTUBE_TOKEN_KEY) for (const listener of tokenListeners) listener(token)
+  if (!isYouTubeKey(key)) for (const listener of tokenListeners) listener(token)
 }
 
 // ---- ログインを保つ仕組み（サーバーの /api/auth がリフレッシュトークンを Cookie に保管する） ----
@@ -170,10 +176,10 @@ async function signInWithServer(scope: string): Promise<string> {
 const tokenClients = new Map<string, TokenClient>()
 async function requestToken(scope: string, key: string): Promise<string> {
   // サーバーにログインを保管できるなら、そちらを使う（一度ログインすれば、それ以降はログインが切れない）
-  const refreshed = key === YOUTUBE_TOKEN_KEY ? null : await refreshToken()
-  const hasScope = () => key === READ_TOKEN_KEY ? storedReadToken() : key === YOUTUBE_TOKEN_KEY ? storedYouTubeToken() : storedToken()
+  const refreshed = isYouTubeKey(key) ? null : await refreshToken()
+  const hasScope = () => key === READ_TOKEN_KEY ? storedReadToken() : key === YOUTUBE_TOKEN_KEY ? storedYouTubeToken() : key === YOUTUBE_WRITE_TOKEN_KEY ? storedYouTubeWriteToken() : storedToken()
   if (refreshed && hasScope()) return hasScope()!
-  if (serverAuth && key !== YOUTUBE_TOKEN_KEY) {
+  if (serverAuth && !isYouTubeKey(key)) {
     await signInWithServer(scope)
     const token = hasScope()
     if (!token) throw new Error(key === YOUTUBE_TOKEN_KEY ? 'YouTubeの読み取り権限が許可されませんでした。同期時に許可してください。' : '必要なGoogleの権限が許可されませんでした')
@@ -213,6 +219,12 @@ export async function signInForRead(): Promise<string> {
 export async function signInForYouTube(): Promise<string> {
   if (!DRIVE_CLIENT_ID) throw new Error('YouTube連携にはGoogleログインの設定が必要です。設定画面の案内をご確認ください。')
   return storedYouTubeToken() ?? requestToken(YOUTUBE_SCOPE, YOUTUBE_TOKEN_KEY)
+}
+
+/** いいね解除ボタンからだけ要求する。初回のみGoogleの許可画面が出る。 */
+export async function signInForYouTubeWrite(): Promise<string> {
+  if (!DRIVE_CLIENT_ID) throw new Error('YouTube連携にはGoogleログインの設定が必要です。設定画面の案内をご確認ください。')
+  return storedYouTubeWriteToken() ?? requestToken(YOUTUBE_WRITE_SCOPE, YOUTUBE_WRITE_TOKEN_KEY)
 }
 
 export function signOut() {

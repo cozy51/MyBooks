@@ -741,26 +741,38 @@ function splitCsv(line: string) { const values: string[] = []; let value = '', q
 // 「表示名::URL」を | で区切る。以前の「種類::表示名::URL」形式も読み込める
 function parseCsvLinks(value: string): BookLink[] { return value.split('|').map(v => v.trim()).filter(Boolean).map((entry, i) => { const parts = entry.split('::'); const url = parts.at(-1) ?? ''; const label = parts.length > 1 ? parts.at(-2) ?? '' : ''; return { id: `${crypto.randomUUID()}-${i}`, label, url } }).filter(l => l.url) }
 
-/** 一覧のページ送り（前後ボタンとページ番号。幅に入りきらないときだけ途中を省略） */
+/** 1段に並べるページ番号の上限 */
+const PAGER_ROW_MAX = 20
+/** 一覧のページ送り（前後ボタンとページ番号。1段に入りきらないときは2段に折り返し、それでも入りきらないときだけ途中を省略） */
 function Pager({ page, pageCount, onChange, className }: { page: number; pageCount: number; onChange: (page: number) => void; className?: string }) {
   const ref = useRef<HTMLElement>(null)
   const measureRef = useRef<HTMLDivElement>(null)
-  const [fitsAll, setFitsAll] = useState(false)
-  // 全ページ分のボタンを見えない所に並べ、実際の幅が収まるかを測る
+  const [perRow, setPerRow] = useState(0)
+  // 前後ボタンとページ番号を見えない所に並べて幅を測り、1段に置ける番号の数を求める
   useLayoutEffect(() => {
     const nav = ref.current, measure = measureRef.current; if (!nav || !measure) return
-    const check = () => setFitsAll(measure.scrollWidth <= nav.clientWidth)
+    const check = () => {
+      const buttons = [...measure.children] as HTMLElement[]
+      if (buttons.length < 3) return
+      const gap = parseFloat(getComputedStyle(nav).columnGap) || 0
+      const arrows = buttons[0].offsetWidth + buttons[buttons.length - 1].offsetWidth + gap * 2
+      const pitch = Math.max(...buttons.slice(1, -1).map(b => b.offsetWidth)) + gap
+      setPerRow(Math.min(PAGER_ROW_MAX, Math.max(1, Math.floor((nav.clientWidth - arrows + gap) / pitch))))
+    }
     const observer = new ResizeObserver(check)
     observer.observe(nav); check()
     return () => observer.disconnect()
   }, [pageCount])
   const all = Array.from({ length: pageCount }, (_, i) => i + 1)
-  const numbers = fitsAll ? all : all.filter(n => n === 1 || n === pageCount || Math.abs(n - page) <= 2)
+  const fits = perRow > 0 && pageCount <= perRow * 2
+  const numbers = fits ? all : all.filter(n => n === 1 || n === pageCount || Math.abs(n - page) <= 2)
+  const rows = fits ? Array.from({ length: Math.ceil(pageCount / perRow) }, (_, i) => all.slice(i * perRow, (i + 1) * perRow)) : [numbers]
+  const button = (n: number) => <button key={n} className={n === page ? 'active' : ''} aria-current={n === page ? 'page' : undefined} onClick={() => onChange(n)}>{n}</button>
   return <nav className={className ? `pager ${className}` : 'pager'} ref={ref} aria-label="ページ送り">
     <button disabled={page === 1} onClick={() => onChange(page - 1)} aria-label="前のページ"><ChevronLeft /></button>
-    {numbers.map((n, i) => <span key={n} className="pager-item">{i > 0 && n - numbers[i - 1] > 1 && <span className="pager-gap">…</span>}<button className={n === page ? 'active' : ''} aria-current={n === page ? 'page' : undefined} onClick={() => onChange(n)}>{n}</button></span>)}
+    <div className="pager-rows">{rows.map((row, r) => <div key={r} className="pager-row">{row.map((n, i) => fits ? button(n) : <span key={n} className="pager-item">{i > 0 && n - row[i - 1] > 1 && <span className="pager-gap">…</span>}{button(n)}</span>)}</div>)}</div>
     <button disabled={page === pageCount} onClick={() => onChange(page + 1)} aria-label="次のページ"><ChevronRight /></button>
-    <div className="pager pager-measure" ref={measureRef} aria-hidden="true"><button tabIndex={-1}><ChevronLeft /></button>{all.map(n => <button key={n} tabIndex={-1}>{n}</button>)}<button tabIndex={-1}><ChevronRight /></button></div>
+    <div className="pager pager-measure" ref={measureRef} aria-hidden="true"><button tabIndex={-1}><ChevronLeft /></button>{[1, pageCount].map((n, i) => <button key={i} tabIndex={-1}>{n}</button>)}<button tabIndex={-1}><ChevronRight /></button></div>
   </nav>
 }
 

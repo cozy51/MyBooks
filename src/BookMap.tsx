@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BookOpen, ChevronRight, Cloud, LoaderCircle, Maximize2, RefreshCw, ZoomIn, ZoomOut } from 'lucide-react'
 import { CoverImage } from './CoverImage'
 import { categories, statusClass } from './data'
+import { computeAxisScores, loadAxisRefs, type AxisRefs } from './semanticAxes'
+import { dequantize } from './embeddingStore'
 import { embedText, recheckRemote, updateBookMap, type MapCache, type MapProgress } from './bookMapData'
 import type { SyncStatus } from './useDriveSync'
 import type { Book } from './types'
@@ -15,12 +17,19 @@ const parentOf = (categoryId: string) => { const c = categories.find(c => c.id =
 const MIN_ZOOM = 0.5, MAX_ZOOM = 80
 const isVideo = (book: Book) => 'type' in book && book.type === 'youtube'
 
-interface Point { book: Book; x: number; y: number; color: string; active: boolean }
+/** 意味軸スコア [横, 縦]。横は +1 に近いほど技術寄り、縦は +1 に近いほど実践寄り */
+type AxisScore = [number, number]
+interface Point { book: Book; x: number; y: number; color: string; active: boolean; axis?: AxisScore }
+/** 近さで配置（UMAP）／意味軸で配置（意味軸スコアをそのまま座標にする） */
+type MapMode = 'similar' | 'axes'
+const MODE_KEY = 'mybooks-map-mode'
+const readMode = (): MapMode => { try { return localStorage.getItem(MODE_KEY) === 'axes' ? 'axes' : 'similar' } catch { return 'similar' } }
 
 /**
- * 分類ごとの重心を置きたい画面上の向き（右が「技術」、上が「具体」。画面のyは下向きが正）。
+ * 「近さで配置」で、分類ごとの重心を置く画面上のおおよその向き（画面のyは下向きが正）。
  * UMAPの配置は回転・反転しても意味が変わらず、計算し直すたびに向きが変わるため、
- * 四辺のラベルと合うよう、この向きに最も近くなるように配置を回転・反転して表示する。
+ * 再計算しても見慣れた向きで表示されるよう、この向きに最も近くなるように配置を回転・反転する。
+ * 座標そのものに意味を持たせるものではない（意味で見るときは「意味軸で配置」を使う）。
  */
 const AXIS_TARGETS: Record<string, [number, number]> = { a: [1, -1], b: [0.3, -1], c: [1, 0.3], d: [0.5, 0.6], e: [-1, 1], f: [-1, 0] }
 
@@ -67,16 +76,34 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
   onConnect: () => void
 }) {
   const { cache, progress, error, driveError, relayout } = useBookMapData(books, driveStatus)
+  const [mode, setModeState] = useState<MapMode>(readMode)
+  const setMode = (m: MapMode) => { setModeState(m); try { localStorage.setItem(MODE_KEY, m) } catch { /* noop */ } }
+  const { refs, error: axisError } = useAxisRefs(cache?.model)
+
+  // 意味軸スコアは表示モードに関係なく求め、ツールチップの割合表示にも使う
+  const axisScores = useMemo(() => {
+    if (!cache || !refs) return null
+    const items = books.flatMap(book => { const entry = cache.entries[book.id]; return entry && embedText(book) ? [{ id: book.id, vector: dequantize(entry.e), categoryId: book.categoryId, video: isVideo(book) }] : [] })
+    return computeAxisScores(items, refs)
+  }, [books, cache, refs])
 
   const points = useMemo<Point[]>(() => {
     if (!cache) return []
-    const placed = books.flatMap(book => { const p = cache.layout[book.id]; return p && embedText(book) ? [{ book, x: p[0], y: p[1], group: parentOf(book.categoryId), anchor: !isVideo(book) }] : [] })
-    // 向きの基準には本だけを使う（動画は分類の付き方が本と異なるため）
-    const coords = orientLayout(placed)
-    const list: Point[] = placed.map(({ book, group }, i) => ({ book, x: coords[i][0], y: coords[i][1], color: PARENT_COLORS[group] ?? OTHER_COLOR, active: visibleIds.has(book.id) }))
+    let list: Point[]
+    if (mode === 'axes') {
+      if (!axisScores) return []
+      // 意味軸スコアをそのまま座標にする（画面のyは下向きが正なので、そのまま使うと理論が上・実践が下になる）
+      list = books.flatMap(book => { const a = axisScores.get(book.id); return a ? [{ book, x: a[0], y: a[1], axis: a, color: PARENT_COLORS[parentOf(book.categoryId)] ?? OTHER_COLOR, active: visibleIds.has(book.id) }] : [] })
+    } else {
+      const placed = books.flatMap(book => { const p = cache.layout[book.id]; return p && embedText(book) ? [{ book, x: p[0], y: p[1], group: parentOf(book.categoryId), anchor: !isVideo(book) }] : [] })
+      // 向きの基準には本だけを使う（動画は分類の付き方が本と異なるため）
+      const coords = orientLayout(placed)
+      list = placed.map(({ book, group }, i) => ({ book, x: coords[i][0], y: coords[i][1], axis: axisScores?.get(book.id), color: PARENT_COLORS[group] ?? OTHER_COLOR, active: visibleIds.has(book.id) }))
+    }
     // 薄い点を先に描き、絞り込みに合う点を上に重ねる
     return list.sort((a, b) => Number(a.active) - Number(b.active))
-  }, [books, cache, visibleIds])
+  }, [books, cache, visibleIds, mode, axisScores])
+  const axesPreparing = mode === 'axes' && Boolean(cache) && !axisScores && !axisError
   const untitled = books.filter(b => !embedText(b)).length
   const pending = books.length - untitled - points.length
   const activeCount = points.filter(p => p.active).length
@@ -91,14 +118,23 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
           <i style={{ background: PARENT_COLORS[p.id] }} />{p.name.replace(/^[A-G]\.\s*/, '')}<small>{counts.get(p.id) ?? 0}</small>
         </button>)}
       </div>
-      <button className="secondary-btn map-relayout" disabled={busy || points.length === 0} onClick={relayout} title="すべての本の配置をUMAPで計算し直します"><RefreshCw /> 配置を再計算</button>
+      <div className="map-actions">
+        <div className="view-switch map-mode" role="group" aria-label="マップの配置方法">
+          <button className={mode === 'similar' ? 'active' : ''} aria-pressed={mode === 'similar'} onClick={() => setMode('similar')} title="内容が似ている本・動画を近くに置きます">近さで配置</button>
+          <button className={mode === 'axes' ? 'active' : ''} aria-pressed={mode === 'axes'} onClick={() => setMode('axes')} title="横を『社会 ↔ 技術』、縦を『理論 ↔ 実践』の意味軸スコアで置きます">意味軸で配置</button>
+        </div>
+        {mode === 'similar' && <button className="secondary-btn map-relayout" disabled={busy || points.length === 0} onClick={relayout} title="すべての本の配置をUMAPで計算し直します"><RefreshCw /> 配置を再計算</button>}
+      </div>
     </div>
-    <MapCanvas points={points} onSelect={onSelect} />
+    <MapCanvas key={mode} points={points} mode={mode} preparing={axesPreparing} onSelect={onSelect} />
     <div className="map-foot">
       {busy ? <span className="map-progress"><LoaderCircle className="spin" />{progressLabel(progress)}{progress.total ? <progress value={progress.done} max={progress.total} /> : null}</span>
         : <span>{activeCount === points.length ? `${points.length}件を配置` : `${points.length}件中 ${activeCount}件が条件に一致`}{untitled > 0 && `・タイトルのない${untitled}冊は対象外`}{pending > 0 && `・未計算 ${pending}冊`}</span>}
-      <span className="map-note">● 本・■ 動画。位置はタイトルと要約の内容の近さ、色は分類を表します。軸は厳密な意味を持ちませんが、横方向は『社会 ↔ 技術』、縦方向は『抽象 ↔ 具体』の傾向として見ることができます。</span>
+      <span className="map-note">{mode === 'similar'
+        ? '● 本・■ 動画、色は分類。位置は内容の類似度をもとに配置しています。縦横の座標そのものに意味はありません（全体として社会寄り・技術寄りなどの傾向が見える場合があります）。'
+        : '● 本・■ 動画、色は分類。横は『社会 ↔ 技術』、縦は『理論 ↔ 実践』の意味軸スコアで配置しています。スコアはタイトル・要約・分類から本と動画で同じ方法で求めた、ライブラリ全体の中での相対的な位置です（中央が中央値）。'}</span>
     </div>
+    {axisError && <p className="map-drive-note">意味軸スコアを計算できませんでした：{axisError}</p>}
     {error && <div className="map-error" role="alert"><p>{error.message}</p>{error.code === 'unauthorized' && driveStatus !== 'unavailable' && <button className="primary-btn" onClick={onConnect}><Cloud /> Googleでログインして接続</button>}</div>}
     {!error && driveError && <p className="map-drive-note">マップのデータをGoogle Driveに保存できませんでした（このブラウザには保存済み）：{driveError}</p>}
   </section>
@@ -144,8 +180,20 @@ function useBookMapData(books: Book[], driveStatus: SyncStatus) {
   return { cache, progress, error, driveError, relayout: () => void run(true) }
 }
 
+/** 意味軸のアンカー・分類のベクトルを用意する（マップと同じEmbeddingのモデルで） */
+function useAxisRefs(model: string | undefined) {
+  const [state, setState] = useState<{ model: string; refs: AxisRefs | null; error: string | null } | null>(null)
+  useEffect(() => {
+    if (!model) return
+    let alive = true
+    loadAxisRefs(model).then(refs => { if (alive) setState({ model, refs, error: null }) }, e => { if (alive) setState({ model, refs: null, error: e instanceof Error ? e.message : String(e) }) })
+    return () => { alive = false }
+  }, [model])
+  return state && state.model === model ? state : { refs: null, error: null }
+}
+
 /** Canvasに点を描き、ズーム・ドラッグ移動・ホバー・クリックを扱う */
-function MapCanvas({ points, onSelect }: { points: Point[]; onSelect: (book: Book) => void }) {
+function MapCanvas({ points, mode, preparing, onSelect }: { points: Point[]; mode: MapMode; preparing: boolean; onSelect: (book: Book) => void }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
@@ -288,11 +336,12 @@ function MapCanvas({ points, onSelect }: { points: Point[]; onSelect: (book: Boo
 
   const center = (factor: number) => zoomAt(factor, size.w / 2, size.h / 2)
   return <div className="map-stage" ref={wrapRef}>
-    <div className="map-guides" aria-hidden="true"><i className="h" /><i className="v" /></div>
-    <canvas ref={canvasRef} role="img" aria-label="本の分類マップ。内容が近い本ほど近くに表示されます" className={shownHover ? 'pointing' : undefined}
+    {/* 中心線と四辺のラベルは、座標に意味がある「意味軸で配置」のときだけ表示する */}
+    {mode === 'axes' && <div className="map-guides" aria-hidden="true"><i className="h" /><i className="v" /></div>}
+    <canvas ref={canvasRef} role="img" aria-label={mode === 'axes' ? '本の意味軸マップ。横は社会から技術、縦は理論から実践への傾きを表します' : '本の分類マップ。内容が近い本ほど近くに表示されます'} className={shownHover ? 'pointing' : undefined}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onPointerLeave={e => { if (e.pointerType === 'mouse' && !pointers.current.size) setHover(null) }} />
-    <MapAxes />
-    {points.length === 0 && <div className="map-empty"><BookOpen /><p>マップに表示できる本がまだありません</p></div>}
+    {mode === 'axes' && <MapAxes />}
+    {points.length === 0 && <div className="map-empty">{preparing ? <><LoaderCircle className="spin" /><p>意味軸スコアを計算しています…</p></> : <><BookOpen /><p>マップに表示できる本がまだありません</p></>}</div>}
     <div className="map-zoom">
       <button onClick={() => center(1.5)} aria-label="拡大" title="拡大"><ZoomIn /></button>
       <button onClick={() => center(1 / 1.5)} aria-label="縮小" title="縮小"><ZoomOut /></button>
@@ -302,16 +351,13 @@ function MapCanvas({ points, onSelect }: { points: Point[]; onSelect: (book: Boo
   </div>
 }
 
-/**
- * 軸の読み方の目安。配置（UMAP）の軸そのものに意味はないが、見る人の手がかりとして四辺に傾向を添える。
- * 埋め込みや配置の計算から求めたものではなく、ズーム・移動しても画面の枠に固定して表示する。
- */
+/** 「意味軸で配置」の四辺のラベル。ズーム・移動しても画面の枠に固定して表示する */
 function MapAxes() {
   return <div className="map-axes" aria-hidden="true">
     <span className="left">← 社会</span>
     <span className="right">技術 →</span>
-    <span className="top">↑ 具体</span>
-    <span className="bottom">↓ 抽象</span>
+    <span className="top">↑ 理論</span>
+    <span className="bottom">↓ 実践</span>
   </div>
 }
 
@@ -331,7 +377,7 @@ function MapTooltip({ point, pos, size, touch }: { point: Point; pos: { x: numbe
     <div className="category-line"><i style={{ background: point.color }} />{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div>
     <strong>{video ? '▶ ' : '📕 '}{book.title}</strong>
     <p>{memo ? (memo.length > 100 ? `${memo.slice(0, 100)}…` : memo) : '要約は未登録です'}</p>
-    <AxisMeters x={point.x} y={point.y} />
+    {point.axis && <AxisMeters score={point.axis} />}
     <div className="map-tooltip-foot">
       <span className={`status mini ${statusClass[book.status]}`}>{video ? (book.memo ? 'AI解析済み' : 'AI未解析') : book.status}</span>
       {touch && <small className="map-tooltip-hint">もう一度タップで詳細を開く</small>}
@@ -340,12 +386,12 @@ function MapTooltip({ point, pos, size, touch }: { point: Point; pos: { x: numbe
 }
 
 /**
- * マップ上の位置を、四辺のラベルに対する割合（%）で示す。
- * 中央が50%で、端（広がりの -1〜1）に近いほどその側の割合が大きくなる
+ * 意味軸スコアを、両端に対する割合（%）で示す（表示モードに関係なく同じ値）。
+ * ライブラリ全体の中央値が50%で、どちらかの端に寄るほどその側の割合が大きくなる
  */
-function AxisMeters({ x, y }: { x: number; y: number }) {
+function AxisMeters({ score }: { score: AxisScore }) {
   const pct = (v: number) => Math.round(Math.max(0, Math.min(1, (v + 1) / 2)) * 100)
-  const rows = [{ left: '社会', right: '技術', value: pct(x) }, { left: '抽象', right: '具体', value: pct(-y) }]
+  const rows = [{ left: '社会', right: '技術', value: pct(score[0]) }, { left: '理論', right: '実践', value: pct(score[1]) }]
   return <div className="map-tooltip-axes">
     {rows.map(r => <div key={r.left} title={`${r.left} ${100 - r.value}% ・ ${r.right} ${r.value}%`}>
       <span className={r.value < 50 ? 'strong' : ''}>{r.left} {100 - r.value}%</span>

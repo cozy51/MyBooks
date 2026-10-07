@@ -42,6 +42,8 @@ export interface YouTubeVideo {
   /** Future optional input; captions are never required or scraped. */
   transcript?: string
   analyzedAt?: string
+  /** Set when the like was removed from this app; hidden from the library but kept so Drive merges don't revive it. */
+  unlikedAt?: string
   createdAt: string
   updatedAt: string
 }

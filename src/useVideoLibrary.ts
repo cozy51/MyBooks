@@ -1,8 +1,8 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import * as drive from './drive'
 import { appendVideos, mergeVideoLibraries, loadVideos, validateVideos, VIDEO_STORE, VIDEO_SYNC_KEY } from './library'
 import { useDriveSync, type SyncAdapter } from './useDriveSync'
-import { fetchLikedVideos } from './youtube'
+import { fetchLikedVideos, unlikeVideo } from './youtube'
 import type { YouTubeVideo } from './types'
 const FILE = 'MyBooks-youtube.json'
 const adapter: SyncAdapter<YouTubeVideo> = {
@@ -43,5 +43,15 @@ export function useVideoLibrary() {
     } catch (e) { setMessage(e instanceof Error ? e.message : 'YouTube同期に失敗しました。再試行してください。') }
     finally { busy.current = false; setSyncing(false) }
   }
-  return { videos, ref, save, update, sync, storageError, syncing, message, lastSync, importLiked }
+  const unlike = async (video: YouTubeVideo) => {
+    if (!confirm(`「${video.title}」のYouTubeのいいねを解除し、ライブラリから外しますか？`)) return
+    try {
+      await unlikeVideo(video.videoId)
+      const now = new Date().toISOString()
+      save(ref.current.map(v => v.videoId === video.videoId ? { ...v, unlikedAt: now, updatedAt: now } : v))
+      setMessage(`「${video.title}」のいいねを解除しました。`)
+    } catch (e) { setMessage(e instanceof Error ? e.message : 'YouTubeのいいねを解除できませんでした。') }
+  }
+  const visible = useMemo(() => videos.filter(v => !v.unlikedAt), [videos])
+  return { videos: visible, ref, save, update, sync, storageError, syncing, message, lastSync, importLiked, unlike }
 }

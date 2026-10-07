@@ -1,4 +1,4 @@
-import { clearYouTubeToken, signInForYouTube } from './drive'
+import { clearYouTubeToken, clearYouTubeWriteToken, signInForYouTube, signInForYouTubeWrite } from './drive'
 import type { YouTubeVideo } from './types'
 interface VideoResponse { items?: { id: string; snippet: { title: string; channelTitle: string; channelId?: string; description?: string; publishedAt?: string; thumbnails?: Record<string, { url: string }> }; contentDetails?: { duration?: string } }[]; nextPageToken?: string; error?: { errors?: { reason?: string }[] } }
 export async function fetchLikedVideos(onProgress: (count: number) => void, signal?: AbortSignal): Promise<YouTubeVideo[]> {
@@ -31,4 +31,20 @@ export async function fetchLikedVideos(onProgress: (count: number) => void, sign
     pages.add(page)
   } while (page)
   return videos
+}
+/** Removes the like on YouTube (rating=none). Only called from an explicit button press. */
+export async function unlikeVideo(videoId: string): Promise<void> {
+  let token: string
+  try { token = await signInForYouTubeWrite() } catch (e) { throw new Error(e instanceof Error ? e.message : 'Googleの認証に失敗しました。再試行してください。', { cause: e }) }
+  let res: Response
+  try { res = await fetch(`https://www.googleapis.com/youtube/v3/videos/rate?${new URLSearchParams({ id: videoId, rating: 'none' })}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) }) }
+  catch { throw new Error('YouTubeに接続できませんでした。ネットワークを確認して再試行してください。') }
+  if (res.ok) return
+  const data = await res.json().catch(() => null) as VideoResponse | null
+  const reason = data?.error?.errors?.[0]?.reason
+  if (res.status === 401) { clearYouTubeWriteToken(); throw new Error('Googleのログインが切れました。もう一度お試しください。') }
+  if (reason === 'quotaExceeded' || reason === 'dailyLimitExceeded' || res.status === 429) throw new Error('YouTube APIの利用上限に達しました。時間をおいて再試行してください。')
+  if (res.status === 403) { clearYouTubeWriteToken(); throw new Error('YouTubeのいいねを変更する権限がありません。Googleの許可画面で許可してください。') }
+  if (res.status === 404) throw new Error('YouTubeで動画が見つかりませんでした（削除・非公開の可能性があります）。')
+  throw new Error('YouTubeのいいねを解除できませんでした。時間をおいて再試行してください。')
 }

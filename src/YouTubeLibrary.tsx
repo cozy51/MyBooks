@@ -2,34 +2,41 @@ import { useEffect, useRef, useState } from 'react'
 import { Bookmark, ExternalLink, Play, Sparkles, ThumbsUp, Tv, X } from 'lucide-react'
 import { categories } from './data'
 import type { VideoBookmark, YouTubeVideo } from './types'
-import { loadYouTubeApi, type PlayerHandle, type YTPlayer } from './youtubePlayer'
+import { loadYouTubeApi, pauseIframe, registerPlayer, type PlayerHandle, type YTPlayer } from './youtubePlayer'
 import { VideoBookmarks } from './VideoBookmarks'
 import { SameChannelVideos, SimilarVideos } from './SimilarVideos'
 import type { LibraryItem } from './types'
 import { CopyButton } from './CopyButton'
 import { cleanSummary, formatDuration, videoCopyText } from './videoText'
-/** Thumbnail that turns into an embedded player in place when clicked. With `handle`, the
- * position can be read and changed (bookmarks); the plain iframe is the fallback if the API won't load. */
+/** Thumbnail that turns into an embedded player in place when clicked. Starting one player pauses
+ * any other on the page. With `handleRef`, the position can be read and changed (bookmarks).
+ * The plain iframe is the fallback if the player API won't load. */
 function VideoPlayer({ video, className = '', handleRef }: { video: YouTubeVideo; className?: string; handleRef?: React.RefObject<PlayerHandle | null> }) {
   const [start, setStart] = useState<number | null>(null), [apiFailed, setApiFailed] = useState(false)
-  const host = useRef<HTMLDivElement>(null)
+  const host = useRef<HTMLDivElement>(null), frame = useRef<HTMLIFrameElement>(null)
   useEffect(() => {
-    if (!handleRef) return
-    if (start === null) { handleRef.current = { currentTime: () => null, seek: t => setStart(t) }; return }
-    if (apiFailed || !host.current) { handleRef.current = { currentTime: () => null, seek: () => {} }; return }
+    if (start === null) { if (handleRef) handleRef.current = { currentTime: () => null, seek: t => setStart(t) }; return }
+    if (apiFailed) {
+      const reg = registerPlayer(() => pauseIframe(frame.current)); reg.pauseOthers()
+      if (handleRef) handleRef.current = { currentTime: () => null, seek: () => {} }
+      return reg.unregister
+    }
+    if (!host.current) return
     let player: YTPlayer | null = null, ready = false, cancelled = false
+    const reg = registerPlayer(() => { if (ready) player!.pauseVideo() }); reg.pauseOthers()
     const el = document.createElement('div'); host.current.replaceChildren(el)
-    handleRef.current = { currentTime: () => ready ? player!.getCurrentTime() : start, seek: t => { if (ready) { player!.seekTo(t, true); player!.playVideo() } } }
+    if (handleRef) handleRef.current = { currentTime: () => ready ? player!.getCurrentTime() : start, seek: t => { if (ready) { player!.seekTo(t, true); player!.playVideo() } } }
     loadYouTubeApi().then(YT => {
       if (cancelled) return
-      player = new YT.Player(el, { videoId: video.videoId, host: 'https://www.youtube-nocookie.com', playerVars: { autoplay: 1, rel: 0, start: Math.floor(start), playsinline: 1 }, events: { onReady: () => { ready = true } } })
+      player = new YT.Player(el, { videoId: video.videoId, host: 'https://www.youtube-nocookie.com', playerVars: { autoplay: 1, rel: 0, start: Math.floor(start), playsinline: 1 },
+        events: { onReady: () => { ready = true }, onStateChange: e => { if (e.data === YT.PlayerState.PLAYING) reg.pauseOthers() } } })
     }).catch(() => { if (!cancelled) setApiFailed(true) })
-    return () => { cancelled = true; player?.destroy() }
+    return () => { cancelled = true; reg.unregister(); player?.destroy() }
   }, [handleRef, start, apiFailed, video.videoId])
   if (start === null) return <button type="button" className={`video-thumbnail ${className}`} aria-label={`${video.title}を再生`} onClick={e => { e.stopPropagation(); setStart(0) }}>{video.thumbnailUrl && <img src={video.thumbnailUrl} alt="" loading="lazy" onError={e => { e.currentTarget.hidden = true }} />}<span className="video-play"><Play /></span></button>
-  return <div className={`video-thumbnail ${className}`} onClick={e => e.stopPropagation()}>{handleRef && !apiFailed
-    ? <div ref={host} className="video-frame" />
-    : <iframe src={`https://www.youtube-nocookie.com/embed/${video.videoId}?autoplay=1&rel=0&start=${Math.floor(start)}`} title={video.title} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen />}</div>
+  return <div className={`video-thumbnail ${className}`} onClick={e => e.stopPropagation()}>{apiFailed
+    ? <iframe ref={frame} src={`https://www.youtube-nocookie.com/embed/${video.videoId}?autoplay=1&rel=0&enablejsapi=1&start=${Math.floor(start)}`} title={video.title} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen />
+    : <div ref={host} className="video-frame" />}</div>
 }
 export function VideoCard({ video, onOpen, selected, onSelect, onAnalyze, onUnlike, busy }: { video: YouTubeVideo; onOpen: () => void; selected: boolean; onSelect: () => void; onAnalyze?: () => void; onUnlike?: () => void; busy?: boolean }) {
   const category = categories.find(c => c.id === (video.subCategory || video.category))

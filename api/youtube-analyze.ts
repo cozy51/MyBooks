@@ -1,16 +1,31 @@
 import { categories } from '../src/data.js'
 import { authorized, notConfigured, provider, reply, unauthorized, upstreamFailure } from './_lib.js'
 import { askJson, stringList, textValue } from './_json-ai.js'
-export function cleanAnalysis(raw: unknown) {
+// AI output varies by model; normalize near-misses instead of rejecting the whole analysis.
+function pickCategory(v: Record<string, unknown>) {
+  const children = categories.filter(c => c.parent)
+  const key = (x: unknown) => textValue(x, 100).toLowerCase().replace(/[\s.．:：-]/g, '')
+  for (const raw of [v.subCategory, v.category]) {
+    const k = key(raw); if (!k) continue
+    const hit = children.find(c => c.id === k || key(c.name) === k || key(c.name.split(/[:：]/)[0]) === k || key(c.name.split(/[:：]/)[1]) === k)
+    if (hit) return hit
+  }
+  const parent = key(v.category)
+  return children.find(c => c.parent === parent) ?? null
+}
+function score(v: unknown) {
+  const n = typeof v === 'string' && v.trim() ? Number(v) : v
+  return typeof n === 'number' && Number.isFinite(n) ? Math.round(Math.min(100, Math.max(0, n))) : 50
+}
+export function cleanAnalysis(input: unknown) {
+  const raw = Array.isArray(input) ? input[0] : input
   if (!raw || typeof raw !== 'object') throw new Error('invalid AI response')
   const v = raw as Record<string, unknown>
-  const child = categories.find(c => c.id === v.subCategory && c.parent)
+  const child = pickCategory(v)
   const summary = textValue(v.summary, 700), keyPoints = stringList(v.keyPoints, 5, 200), tags = stringList(v.tags, 10, 50)
-  const score = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100 ? Math.round(v) : null
-  const concreteAbstractScore = score(v.concreteAbstractScore), technicalSocialScore = score(v.technicalSocialScore)
+  if (!summary || !child || !keyPoints.length) throw new Error('invalid AI response')
   const recommendedFor = textValue(v.recommendedFor, 250)
-  if (!summary || keyPoints.length < 3 || tags.length < 5 || !child || !recommendedFor || concreteAbstractScore === null || technicalSocialScore === null) throw new Error('invalid AI response')
-  return { summary, keyPoints, category: child.parent!, subCategory: child.id, tags, concreteAbstractScore, technicalSocialScore, recommendedFor, aiComment: textValue(v.aiComment, 300), embeddingText: [summary, ...keyPoints, ...tags].join('\n') }
+  return { summary, keyPoints, category: child.parent!, subCategory: child.id, tags, concreteAbstractScore: score(v.concreteAbstractScore), technicalSocialScore: score(v.technicalSocialScore), recommendedFor, aiComment: textValue(v.aiComment, 300), embeddingText: [summary, ...keyPoints, ...tags].join('\n') }
 }
 export async function POST(request: Request) {
   const p = provider(); if (!p) return notConfigured()
@@ -25,6 +40,13 @@ export async function POST(request: Request) {
 既存の分類（親と子のIDを使う）: ${JSON.stringify(categories)}
 JSON形式: {"summary":"300〜500字程度の要約","keyPoints":["重要ポイント3〜5個"],"category":"親ID","subCategory":"子ID","tags":["5〜10個"],"recommendedFor":"おすすめ対象","aiComment":"情報の限界や補足","concreteAbstractScore":0,"technicalSocialScore":0}
 数値は0〜100。具体⇔抽象は0=具体、100=抽象。技術⇔社会は0=技術、100=社会。既存マップの軸と同じ概念で、これはメタデータに対する目安でありUMAP座標ではありません。`
-  try { return reply(200, { analysis: cleanAnalysis(await askJson(p, prompt, process.env.YOUTUBE_MODEL || process.env.SUMMARY_MODEL || process.env.VISION_MODEL)) }) }
-  catch (e) { if (e instanceof SyntaxError || e instanceof Error && e.message === 'invalid AI response') return reply(502, { error: 'AIの解析結果を確認できませんでした。もう一度お試しください。', code: 'temporary' }); return upstreamFailure(e, '動画AI解析') }
+  const model = process.env.YOUTUBE_MODEL || process.env.SUMMARY_MODEL || process.env.VISION_MODEL
+  const started = Date.now()
+  const invalid = (e: unknown) => e instanceof SyntaxError || e instanceof Error && e.message === 'invalid AI response'
+  try {
+    // One retry (only while the client's 65s timeout leaves room) absorbs occasional malformed output.
+    try { return reply(200, { analysis: cleanAnalysis(await askJson(p, prompt, model)) }) }
+    catch (e) { if (!invalid(e) || Date.now() - started > 25_000) throw e; return reply(200, { analysis: cleanAnalysis(await askJson(p, prompt, model)) }) }
+  }
+  catch (e) { if (invalid(e)) return reply(502, { error: 'AIの解析結果を確認できませんでした。もう一度お試しください。', code: 'temporary' }); return upstreamFailure(e, '動画AI解析') }
 }

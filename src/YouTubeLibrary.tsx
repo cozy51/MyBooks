@@ -5,8 +5,12 @@ import type { YouTubeVideo } from './types'
 export function VideoCard({ video, onOpen, selected, onSelect, onAnalyze, busy }: { video: YouTubeVideo; onOpen: () => void; selected: boolean; onSelect: () => void; onAnalyze?: () => void; busy?: boolean }) {
   const category = categories.find(c => c.id === (video.subCategory || video.category))
   return <article className="book-card video-card" tabIndex={0} onClick={onOpen} onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget) onOpen() }}>
-    <div className="video-thumbnail">{video.thumbnailUrl ? <img src={video.thumbnailUrl} alt="" loading="lazy" onError={e => { e.currentTarget.hidden = true }} /> : <Play />}<span className="video-type"><Play size={14} /> YouTube</span></div>
-    <div className="card-body"><div className="category-line"><b>{category?.name || '未分類'}</b></div><h3>{video.title}</h3><p className="author">{video.channelTitle}</p><p className="video-excerpt">{video.summary || 'AI未解析'}</p><div className="video-actions"><button type="button" className="secondary-btn" disabled={busy || !!video.analyzedAt || !onAnalyze} onClick={e => { e.stopPropagation(); onAnalyze?.() }}><Sparkles size={14} />{busy ? '解析待ち・解析中' : video.analyzedAt ? 'AI解析済み' : 'AI解析'}</button><a href={video.videoUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>YouTubeで見る <ExternalLink size={14} /></a></div><div className="video-foot"><small>{video.publishedAt?.slice(0, 7)}</small><label className="video-check" onClick={e => e.stopPropagation()}><input type="checkbox" aria-label={`${video.title}を選択`} checked={selected} onChange={onSelect} />選択</label></div></div>
+    <div className="video-thumbnail">{video.thumbnailUrl ? <img src={video.thumbnailUrl} alt="" loading="lazy" onError={e => { e.currentTarget.hidden = true }} /> : <Play />}</div>
+    <div className="card-body"><div className="category-line"><b>{category?.name || '未分類'}</b></div>
+      <div className="video-title"><input type="checkbox" className="video-check" aria-label={`${video.title}を選択`} checked={selected} onClick={e => e.stopPropagation()} onChange={onSelect} /><h3>{video.title}</h3></div>
+      <p className="author">{video.channelTitle}</p>
+      <div className="video-actions"><button type="button" className={`video-analyze${video.analyzedAt ? ' done' : ''}`} disabled={busy || !!video.analyzedAt || !onAnalyze} onClick={e => { e.stopPropagation(); onAnalyze?.() }}><Sparkles size={12} />{busy ? '解析中…' : video.analyzedAt ? 'AI解析済み' : 'AI解析'}</button><a href={video.videoUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>YouTubeで見る <ExternalLink size={12} /></a></div>
+      <p className="video-excerpt">{video.summary || 'AI未解析'}</p><small>{video.publishedAt?.slice(0, 7)}</small></div>
   </article>
 }
 export function VideoModal({ video, onClose, onAnalyze, busy }: { video: YouTubeVideo; onClose: () => void; onAnalyze?: () => void; busy?: boolean }) {

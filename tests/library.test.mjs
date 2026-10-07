@@ -37,9 +37,14 @@ test('backup validation rejects invalid IDs and malformed analysis arrays', () =
  const safe = library.validateVideos([video(undefined, { videoUrl: 'javascript:alert(1)', thumbnailUrl: 'https://evil.example/x' })])[0]
  assert.match(safe.videoUrl, /^https:\/\/www.youtube.com/); assert.equal(safe.thumbnailUrl, '')
 })
-test('AI output requires valid existing categories, points, tags and bounded scores', () => {
+test('AI output keeps existing categories and normalizes near-miss fields', () => {
  assert.equal(analyze.cleanAnalysis(analysis).category, 'c')
- for (const patch of [{ subCategory: 'unknown' }, { concreteAbstractScore: 101 }, { technicalSocialScore: '50' }, { keyPoints: ['one'] }, { tags: [] }, { summary: '' }]) assert.throws(() => analyze.cleanAnalysis({ ...analysis, ...patch }))
+ for (const patch of [{ subCategory: 'unknown', category: 'unknown' }, { keyPoints: [] }, { summary: '' }]) assert.throws(() => analyze.cleanAnalysis({ ...analysis, ...patch }))
+ const loose = analyze.cleanAnalysis({ ...analysis, subCategory: 'F-2: 趣味・実用・教養', concreteAbstractScore: 101, technicalSocialScore: '40', keyPoints: ['one'], tags: [] })
+ assert.equal(loose.subCategory, 'f2'); assert.equal(loose.concreteAbstractScore, 100); assert.equal(loose.technicalSocialScore, 40); assert.deepEqual(loose.tags, [])
+ assert.equal(analyze.cleanAnalysis({ ...analysis, subCategory: 'F-1' }).subCategory, 'f1')
+ assert.equal(analyze.cleanAnalysis({ ...analysis, subCategory: undefined, category: 'f' }).subCategory, 'f1')
+ assert.equal(analyze.cleanAnalysis([analysis]).category, 'c')
 })
 test('candidate pool retains both media and ranking still includes keyword matches', () => {
  const books = Array.from({ length: 20 }, (_, i) => ({ ...book, id: `book-${i}` }))

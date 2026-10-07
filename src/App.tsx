@@ -89,6 +89,7 @@ function loadBooks(): Book[] {
 
 const SEMANTIC_KEY = 'mybooks-semantic-search'
 const DEBUG_KEY = 'mybooks-search-debug'
+const CONTENT_TYPE_KEY = 'mybooks-content-type'
 const PAGE_KEY = 'mybooks-page'
 const readFlag = (key: string, fallback: boolean) => { try { const v = localStorage.getItem(key); return v === null ? fallback : v === '1' } catch { return fallback } }
 const writeFlag = (key: string, value: boolean) => { try { localStorage.setItem(key, value ? '1' : '0') } catch { /* noop */ } }
@@ -100,7 +101,9 @@ function App() {
   const videoLibrary = useVideoLibrary()
   const analysis = useVideoAnalysis(videoLibrary.ref, videoLibrary.update)
   const unanalyzedCount = videoLibrary.videos.filter(v => !v.analyzedAt).length
-  const [contentType, setContentType] = useState<'book' | 'youtube' | 'all'>('book')
+  // Remember the 本 / YouTube / すべて tab across reloads.
+  const [contentType, setContentType] = useState<'book' | 'youtube' | 'all'>(() => { try { const v = localStorage.getItem(CONTENT_TYPE_KEY); return v === 'youtube' || v === 'all' ? v : 'book' } catch { return 'book' } })
+  useEffect(() => { try { localStorage.setItem(CONTENT_TYPE_KEY, contentType) } catch { /* noop */ } }, [contentType])
   const [selectedVideos, setSelectedVideos] = useState<Set<string>>(new Set())
   const [editingVideo, setEditingVideo] = useState<string | null>(null)
   const [interestsOpen, setInterestsOpen] = useState(false)

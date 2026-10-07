@@ -17,6 +17,7 @@ export interface Book {
 }
 
 export type LibraryItemType = 'book' | 'youtube'
+export interface VideoBookmark { id: string; time: number; note: string; createdAt: string }
 export interface YouTubeVideo {
   id: string
   type: 'youtube'
@@ -42,6 +43,8 @@ export interface YouTubeVideo {
   /** Future optional input; captions are never required or scraped. */
   transcript?: string
   analyzedAt?: string
+  /** Time-stamped notes the user adds while watching. */
+  bookmarks?: VideoBookmark[]
   /** Set when the like was removed from this app; hidden from the library but kept so Drive merges don't revive it. */
   unlikedAt?: string
   createdAt: string

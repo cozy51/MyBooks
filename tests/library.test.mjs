@@ -79,6 +79,15 @@ test('unliked videos stay hidden across merges and come back only when liked aga
  assert.ok(relike.videos[0].updatedAt > gone.updatedAt)
  assert.equal(library.appendVideos([gone], []).videos[0].unlikedAt, gone.unlikedAt)
 })
+test('bookmarks keep time-stamped notes and validate their shape', () => {
+ assert.equal(videoText.formatTime(83), '1:23'); assert.equal(videoText.formatTime(3723), '1:02:03'); assert.equal(videoText.formatTime(5.9), '0:05')
+ assert.equal(videoText.parseTime('1:23'), 83); assert.equal(videoText.parseTime('1:02:03'), 3723); assert.equal(videoText.parseTime('90'), 90); assert.equal(videoText.parseTime('１:２'), null); assert.equal(videoText.parseTime('a'), null)
+ const marks = [{ id: '2', time: 90, note: '後半', createdAt: '2026-10-07T00:00:00Z' }, { id: '1', time: 5, note: '冒頭', createdAt: '2026-10-07T00:00:00Z' }]
+ assert.equal(library.validateVideos([video(undefined, { bookmarks: marks })])[0].bookmarks.length, 2)
+ for (const bad of [{}, [{ id: '1', time: -1, note: '', createdAt: '2026-10-07T00:00:00Z' }], [{ id: '1', time: 1, note: 3, createdAt: '2026-10-07T00:00:00Z' }]]) assert.throws(() => library.validateVideos([video(undefined, { bookmarks: bad })]))
+ assert.equal(videoText.bookmarkLines({ bookmarks: marks }), '・0:05 冒頭\n・1:30 後半')
+ assert.match(videoText.videoCopyText({ title: 'T', videoUrl: 'u', bookmarks: marks }), /ブックマーク\n・0:05 冒頭/)
+})
 test('candidate pool retains both media and ranking still includes keyword matches', () => {
  const books = Array.from({ length: 20 }, (_, i) => ({ ...book, id: `book-${i}` }))
  const v = library.videoItem(video())

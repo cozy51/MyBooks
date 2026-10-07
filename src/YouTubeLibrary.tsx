@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { ExternalLink, Play, Sparkles, X } from 'lucide-react'
 import { categories } from './data'
 import type { YouTubeVideo } from './types'
@@ -6,12 +6,15 @@ import { CopyButton } from './CopyButton'
 import { cleanSummary, videoCopyText } from './videoText'
 export function VideoCard({ video, onOpen, selected, onSelect, onAnalyze, busy }: { video: YouTubeVideo; onOpen: () => void; selected: boolean; onSelect: () => void; onAnalyze?: () => void; busy?: boolean }) {
   const category = categories.find(c => c.id === (video.subCategory || video.category))
+  const [playing, setPlaying] = useState(false)
   return <article className="book-card video-card" tabIndex={0} onClick={onOpen} onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget) onOpen() }}>
-    <div className="video-thumbnail">{video.thumbnailUrl ? <img src={video.thumbnailUrl} alt="" loading="lazy" onError={e => { e.currentTarget.hidden = true }} /> : <Play />}</div>
+    {playing
+      ? <div className="video-thumbnail" onClick={e => e.stopPropagation()}><iframe src={`https://www.youtube-nocookie.com/embed/${video.videoId}?autoplay=1&rel=0`} title={video.title} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen /></div>
+      : <button type="button" className="video-thumbnail" aria-label={`${video.title}を再生`} onClick={e => { e.stopPropagation(); setPlaying(true) }}>{video.thumbnailUrl && <img src={video.thumbnailUrl} alt="" loading="lazy" onError={e => { e.currentTarget.hidden = true }} />}<span className="video-play"><Play /></span></button>}
     <div className="card-body"><div className="category-line"><b>{category?.name || '未分類'}</b></div>
       <div className="video-title"><input type="checkbox" className="video-check" aria-label={`${video.title}を選択`} checked={selected} onClick={e => e.stopPropagation()} onChange={onSelect} /><h3>{video.title}</h3></div>
       <p className="author">{video.channelTitle}</p>
-      <div className="video-actions"><div><button type="button" className={`video-analyze${video.analyzedAt ? ' done' : ''}`} disabled={busy || !!video.analyzedAt || !onAnalyze} onClick={e => { e.stopPropagation(); onAnalyze?.() }}><Sparkles size={12} />{busy ? '解析中…' : video.analyzedAt ? 'AI解析済み' : 'AI解析'}</button>{video.summary && <CopyButton text={videoCopyText(video)} title="タイトル・URL・AI要約・重要ポイントをコピー" />}</div><a href={video.videoUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>YouTubeで見る <ExternalLink size={12} /></a></div>
+      <div className="video-actions"><div><button type="button" className={`video-analyze${video.analyzedAt ? ' done' : ''}`} disabled={busy || !!video.analyzedAt || !onAnalyze} onClick={e => { e.stopPropagation(); onAnalyze?.() }}><Sparkles size={12} />{busy ? '解析中…' : video.analyzedAt ? 'AI解析済み' : 'AI解析'}</button>{video.summary && <CopyButton text={videoCopyText(video)} title="タイトル・URL・AI要約・重要ポイントをコピー" />}<a className="video-open" href={video.videoUrl} target="_blank" rel="noopener noreferrer" aria-label="YouTubeで見る" title="YouTubeで見る" onClick={e => e.stopPropagation()}><ExternalLink size={14} /></a></div></div>
       <p className="video-excerpt">{cleanSummary(video.summary) || 'AI未解析'}</p><small>{video.publishedAt?.slice(0, 7)}</small></div>
   </article>
 }

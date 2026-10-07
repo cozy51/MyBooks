@@ -41,3 +41,9 @@ export function driveFileUrl(value: string): string | null {
   const id = driveFileId(value)
   return id ? `https://drive.google.com/file/d/${id}/view` : null
 }
+
+/** タイトルと著者で Amazon の「本」カテゴリを検索する URL（表紙画像を探すため）。タイトルが空なら null */
+export function amazonSearchUrl(title: string, author = ''): string | null {
+  const q = [title, author].map(s => s.trim()).filter(Boolean).join(' ')
+  return title.trim() ? `https://www.amazon.co.jp/s?k=${encodeURIComponent(q)}&i=stripbooks` : null
+}

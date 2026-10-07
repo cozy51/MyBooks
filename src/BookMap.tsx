@@ -284,16 +284,18 @@ function MapTooltip({ point, pos, size, touch }: { point: Point; pos: { x: numbe
   const child = categories.find(c => c.id === book.categoryId)
   const parent = categories.find(c => c.id === child?.parent)
   const memo = book.memo.trim()
-  const width = Math.min(300, size.w - 24)
+  const video = isVideo(book)
+  // 動画はサムネイルが横長なので、ツールチップも少し広げて要約をサムネイルの下まで使う
+  const width = Math.min(video ? 340 : 300, size.w - 24)
   const left = pos.x + 16 + width > size.w ? Math.max(8, pos.x - 16 - width) : pos.x + 16
   const top = Math.min(Math.max(8, pos.y - 40), Math.max(8, size.h - 190))
-  return <div className="map-tooltip" style={{ left, top, width }}>
-    <div className={`map-tooltip-cover${isVideo(book) ? ' video' : ''}`}><CoverImage src={book.cover} alt="" width={200} fallback={<BookOpen />} /></div>
+  return <div className={`map-tooltip${video ? ' video' : ''}`} style={{ left, top, width }}>
+    <div className="map-tooltip-cover"><CoverImage src={book.cover} alt="" width={200} fallback={<BookOpen />} /></div>
     <div className="map-tooltip-body">
       <div className="category-line"><i style={{ background: point.color }} />{parent && <><span>{parent.name}</span><ChevronRight /></>}<b>{child?.name}</b></div>
-      <strong>{'type' in book && book.type === 'youtube' ? '▶ ' : '📕 '}{book.title}</strong>
+      <strong>{video ? '▶ ' : '📕 '}{book.title}</strong>
       <p>{memo ? (memo.length > 100 ? `${memo.slice(0, 100)}…` : memo) : '要約は未登録です'}</p>
-      <span className={`status mini ${statusClass[book.status]}`}>{'type' in book && book.type === 'youtube' ? (book.memo ? 'AI解析済み' : 'AI未解析') : book.status}</span>
+      <span className={`status mini ${statusClass[book.status]}`}>{video ? (book.memo ? 'AI解析済み' : 'AI未解析') : book.status}</span>
       {touch && <small className="map-tooltip-hint">もう一度タップで詳細を開く</small>}
     </div>
   </div>

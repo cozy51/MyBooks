@@ -146,7 +146,8 @@ export default function BookMap({ books, visibleIds, category, onCategory, onSel
           <button className={mode === 'similar' ? 'active' : ''} aria-pressed={mode === 'similar'} onClick={() => setMode('similar')} title="UMAP（非線形の次元圧縮）：内容が似ている本・動画が近くに集まるように配置します。座標の向きに意味はありません">意味の近さで配置（UMAP）</button>
           <button className={mode === 'pca' ? 'active' : ''} aria-pressed={mode === 'pca'} onClick={() => setMode('pca')} title="PCA（主成分分析、線形の次元圧縮）：ライブラリ全体でばらつきが最も大きい2方向を、横（PC1）・縦（PC2）にして配置します">主成分で配置（PCA）</button>
         </div>
-        {mode === 'similar' && <button className="secondary-btn map-relayout" disabled={busy || points.length === 0} onClick={relayout} title="すべての本の配置をUMAPで計算し直します"><RefreshCw /> UMAPを再計算</button>}
+        {/* 配置方法を切り替えても切り替えボタンの位置が動かないよう、UMAP以外では見えなくするだけで場所は残す */}
+        <button className={`secondary-btn map-relayout${mode === 'similar' ? '' : ' placeholder'}`} disabled={mode !== 'similar' || busy || points.length === 0} aria-hidden={mode !== 'similar'} tabIndex={mode === 'similar' ? undefined : -1} onClick={relayout} title="すべての本の配置をUMAPで計算し直します"><RefreshCw /> UMAPを再計算</button>
       </div>
     </div>
     <MapCanvas key={mode} points={points} mode={mode} pcaRatios={pca?.ratios} preparing={axesPreparing} onSelect={onSelect} />

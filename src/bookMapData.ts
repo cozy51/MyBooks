@@ -199,6 +199,12 @@ export function recheckRemote() { remoteChecked = false }
 
 // ---- 類似する本 ----
 
+/** 保存済みのマップデータ（ベクトル）を読み込む。マップを開いていなくても使える */
+export async function loadMapCache(): Promise<MapCache | null> {
+  memoryCache ??= await loadLocal<MapCache>(DB_KEY)
+  return memoryCache
+}
+
 export interface SimilarBook { book: Book; score: number }
 
 /**

@@ -3,6 +3,7 @@ import { BookOpen, ChevronRight, Cloud, LoaderCircle, Maximize2, RefreshCw, Zoom
 import { CoverImage } from './CoverImage'
 import { categories, statusClass } from './data'
 import { computeAxisScores, loadAxisRefs, type AxisRefs } from './semanticAxes'
+import { AxisMeters, type AxisScore } from './AxisMeters'
 import { dequantize } from './embeddingStore'
 import { pca2 } from './pca'
 import { embedText, recheckRemote, updateBookMap, type MapCache, type MapProgress } from './bookMapData'
@@ -18,8 +19,6 @@ const parentOf = (categoryId: string) => { const c = categories.find(c => c.id =
 const MIN_ZOOM = 0.5, MAX_ZOOM = 80
 const isVideo = (book: Book) => 'type' in book && book.type === 'youtube'
 
-/** 意味軸スコア [横, 縦]。横は +1 に近いほど技術寄り、縦は +1 に近いほど実践寄り */
-type AxisScore = [number, number]
 interface Point { book: Book; x: number; y: number; color: string; active: boolean; axis?: AxisScore }
 /** 意味軸で配置（意味軸スコアをそのまま座標にする）／意味の近さで配置（UMAP）／主成分で配置（PCA） */
 type MapMode = 'similar' | 'pca' | 'axes'
@@ -419,21 +418,5 @@ function MapTooltip({ point, pos, size, touch }: { point: Point; pos: { x: numbe
       <span className={`status mini ${statusClass[book.status]}`}>{video ? (book.memo ? 'AI解析済み' : 'AI未解析') : book.status}</span>
       {touch && <small className="map-tooltip-hint">もう一度タップで詳細を開く</small>}
     </div>
-  </div>
-}
-
-/**
- * 意味軸スコアを、両端に対する割合（%）で示す（表示モードに関係なく同じ値）。
- * ライブラリ全体の中央値が50%で、どちらかの端に寄るほどその側の割合が大きくなる
- */
-function AxisMeters({ score }: { score: AxisScore }) {
-  const pct = (v: number) => Math.round(Math.max(0, Math.min(1, (v + 1) / 2)) * 100)
-  const rows = [{ left: '社会', right: '技術', value: pct(score[0]) }, { left: '理論', right: '実践', value: pct(score[1]) }]
-  return <div className="map-tooltip-axes">
-    {rows.map(r => <div key={r.left} title={`${r.left} ${100 - r.value}% ・ ${r.right} ${r.value}%`}>
-      <span className={r.value < 50 ? 'strong' : ''}>{r.left} {100 - r.value}%</span>
-      <i><b style={{ left: `${r.value}%` }} /></i>
-      <span className={r.value > 50 ? 'strong' : ''}>{r.value}% {r.right}</span>
-    </div>)}
   </div>
 }

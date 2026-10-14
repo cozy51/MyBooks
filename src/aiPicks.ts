@@ -8,7 +8,7 @@ import { categoryName, embedQuery, semanticScores, updateSearchIndex, type Index
 import type { Book } from './types'
 
 /** AIに渡す候補の冊数（意味の近い順） */
-const CANDIDATES = 15
+const CANDIDATES = 20
 export const MAX_QUERY = 1000
 
 export interface PickTheme { interest: string; theme: string }

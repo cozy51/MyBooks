@@ -35,11 +35,10 @@ function lastCategory() {
   try { const id = localStorage.getItem(LAST_CATEGORY); if (id && categories.some(c => c.id === id && c.parent)) return id } catch { /* noop */ }
   return 'd1'
 }
-const LAST_BASE_MONTH = 'mybooks-last-base-month'
-/** 前回保存した本の基準月（新しい本の初期値に使う。まだ保存していなければ空欄） */
-function lastBaseMonth() {
-  try { const month = localStorage.getItem(LAST_BASE_MONTH); if (month === '' || (month && /^\d{4}-\d{2}$/.test(month))) return month } catch { /* noop */ }
-  return ''
+/** 今月（ローカル時刻のYYYY-MM。新しい本の基準月の初期値に使う） */
+function currentMonth() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 /** 基準月の入力をYYYY-MMにそろえる（2026-9・2026/09・202609・全角数字も可）。読めないときはnull、空欄は空欄 */
 function normalizeMonth(value: string): string | null {
@@ -79,7 +78,7 @@ function coverFields(books: Book[], book: Book, info: CoverInfo) {
 /** 関連リンクの「全ページスキャン」のURL */
 const scanLink = (links: BookLink[]) => links.find(l => isScan(l) && isUrl(l.url.trim()))?.url.trim()
 const REPLACE_MEMO = '全ページスキャンから作った要約で、今の要約を置き換えますか？\n（時間がかかるので、この画面は閉じてもかまいません。終わると自動で保存されます）'
-const emptyBook = (): Book => ({ id: crypto.randomUUID(), title: '', author: '', categoryId: lastCategory(), cover: '', baseMonth: lastBaseMonth(), status: '未読', memo: '', links: [], updatedAt: new Date().toISOString() })
+const emptyBook = (): Book => ({ id: crypto.randomUUID(), title: '', author: '', categoryId: lastCategory(), cover: '', baseMonth: currentMonth(), status: '未読', memo: '', links: [], updatedAt: new Date().toISOString() })
 
 // 表紙はDriveのファイルIDで保持する（以前の共有リンク形式もIDにそろえる）
 const withCoverIds = (books: Book[]) => books.map(b => ({ ...b, cover: normalizeCover(b.cover || '') }))
@@ -248,7 +247,7 @@ function App() {
     else dropJob(book.id)
   }
   // 基準月の候補（今月と、登録済みの本で使っている月を新しい順に）
-  const monthOptions = useMemo(() => [...new Set([new Date().toISOString().slice(0, 7), ...books.map(b => b.baseMonth).filter(Boolean)])].sort().reverse(), [books])
+  const monthOptions = useMemo(() => [...new Set([currentMonth(), ...books.map(b => b.baseMonth).filter(Boolean)])].sort().reverse(), [books])
   // 分類・読書状況で絞り込んだうえで、キーワード検索（従来どおりの部分一致）または意味検索を組み合わせたハイブリッド検索で並べる
   const semanticResult = semantic.state.status === 'ready' && semantic.state.query === query.trim() ? semantic.state.scores : null
   const { filtered, scores } = useMemo(() => {
@@ -368,7 +367,7 @@ function App() {
     {settingsOpen && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-label="設定"><div className="modal-head"><h2>設定</h2><button className="icon-btn" aria-label="閉じる" onClick={() => setSettingsOpen(false)}><X /></button></div><div className="video-detail"><h3>YouTube連携</h3><p>Googleアカウント：{!DRIVE_CLIENT_ID ? '未設定' : storedGoogleToken() ? '接続済み' : '未接続'}</p><p>YouTubeの読み取り権限：{storedYouTubeToken() ? '許可済み' : '同期時に許可'}</p><p>高評価動画：{videoLibrary.videos.length}件</p><p>最終同期：{videoLibrary.lastSync ? new Date(videoLibrary.lastSync).toLocaleString('ja-JP') : '未同期'}</p><button className="primary-btn" disabled={videoLibrary.syncing} onClick={() => void videoLibrary.importLiked()}>今すぐ同期</button><p role="status">{videoLibrary.message}</p><p>AI解析済み：{videoLibrary.videos.filter(v => v.analyzedAt).length} / {videoLibrary.videos.length}</p><button className="secondary-btn" disabled={analysis.pending.size > 0} onClick={() => void analysis.run(videoLibrary.videos)}>未解析をAI解析</button><p role="status">{analysis.message}</p><p>動画のDrive保存：{syncLabel[videoLibrary.sync.status]}</p>{videoLibrary.sync.message && <p role="alert">{videoLibrary.sync.message}</p>}<button className="secondary-btn" onClick={() => void videoLibrary.sync.syncNow()}>動画をDriveと同期</button>{videoLibrary.sync.status === 'needsFolder' && <button className="secondary-btn" onClick={() => void videoLibrary.sync.grantFolder()}>保存先フォルダを許可</button>}<p>Google CloudでYouTube Data API v3を有効にし、OAuth同意画面にYouTubeの読み取り専用権限を追加してください。APIキーだけでは高評価動画を取得できません。</p></div></section></div>}
     {zoomed && <CoverLightbox {...zoomed} onClose={() => setZoomed(null)} />}
     {aiPicksOpen && <AiPicksModal label={contentType === 'all' ? 'AIセレクト' : contentType === 'youtube' ? 'AI選動画' : 'AI選書'} books={displayedItems} indexItems={libraryItems} driveStatus={drive.status} onConnect={() => void drive.connect()} onOpen={openItem} onClose={() => setAiPicksOpen(false)} />}
-    {editing && <BookModal indexItems={libraryItems} key={editing.id} book={editing} books={books} summaryJob={summaryJobs.get(editing.id)} summaryIssue={summaryIssues[editing.id]} onCancelSummary={() => cancelSummary(editing.id)} onSummarize={startSummary} onSummaryApplied={() => dropJob(editing.id)} tab={modalTab} onTab={setModalTab} onOpen={openBook} nav={bookNav} onStep={stepBook} keysBlocked={Boolean(zoomed)} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId); localStorage.setItem(LAST_BASE_MONTH, book.baseMonth) } catch { /* noop */ } if (findDuplicate(books, book)) return; const prev = books.find(b => b.id === book.id); if (summaryIssues[book.id]?.kind === 'mismatch' && (scanLink(prev?.links ?? []) !== scanLink(book.links) || prev?.title !== book.title)) setIssue(book.id, null); const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); if (open) openBook(open); else setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
+    {editing && <BookModal indexItems={libraryItems} key={editing.id} book={editing} books={books} summaryJob={summaryJobs.get(editing.id)} summaryIssue={summaryIssues[editing.id]} onCancelSummary={() => cancelSummary(editing.id)} onSummarize={startSummary} onSummaryApplied={() => dropJob(editing.id)} tab={modalTab} onTab={setModalTab} onOpen={openBook} nav={bookNav} onStep={stepBook} keysBlocked={Boolean(zoomed)} monthOptions={monthOptions} onZoom={setZoomed} onClose={() => setEditing(null)} onSave={(book, open) => { try { localStorage.setItem(LAST_CATEGORY, book.categoryId) } catch { /* noop */ } if (findDuplicate(books, book)) return; const prev = books.find(b => b.id === book.id); if (summaryIssues[book.id]?.kind === 'mismatch' && (scanLink(prev?.links ?? []) !== scanLink(book.links) || prev?.title !== book.title)) setIssue(book.id, null); const next = books.some(b => b.id === book.id) ? books.map(b => b.id === book.id ? book : b) : [book, ...books]; saveBooks(next); if (open) openBook(open); else setEditing(null) }} onDelete={id => { if (confirm('この本を削除しますか？')) { saveBooks(books.filter(b => b.id !== id)); setEditing(null) } }} />}
     {backupOpen && <BackupModal drive={drive} onClose={() => setBackupOpen(false)} onExport={exportJson} onImport={() => fileRef.current?.click()} />}
     <input ref={fileRef} hidden type="file" accept=".json,.csv" onChange={e => importFile(e.target.files?.[0])} />
   </div>

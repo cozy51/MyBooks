@@ -6,6 +6,8 @@ export const SCAN_LABEL = '全ページスキャン'
 export const LINK_PRESETS = [SCAN_LABEL, 'インフォグラフィック', 'GeminiNotebookスライド', '音声解説', '動画解説', 'GeminiNotebookスライド動画']
 /** カードに表示するときの短い名前 */
 export const SHORT_LABELS: Record<string, string> = { [SCAN_LABEL]: 'Scan', 'インフォグラフィック': 'InfoG', 'GeminiNotebookスライド': 'Slide', '音声解説': 'Voice', '動画解説': 'Movie', 'GeminiNotebookスライド動画': 'SlideM' }
+/** カードのリンクの色分け用クラス名（Scan は既存の scan クラス） */
+export const CHIP_KINDS: Record<string, string> = { [SCAN_LABEL]: 'scan', 'インフォグラフィック': 'infog', 'GeminiNotebookスライド': 'slide', '音声解説': 'voice', '動画解説': 'movie', 'GeminiNotebookスライド動画': 'slidem' }
 /** カードに表示するリンクの最大数 */
 export const CARD_LINK_LIMIT = 6
 
@@ -18,6 +20,9 @@ export function canonicalLabel(label: string): string {
 }
 /** カードに表示するときの短い名前 */
 export const shortLabel = (label: string) => SHORT_LABELS[canonicalLabel(label)] ?? (label.trim() || 'リンク')
+
+/** カードのリンクの色分け用クラス名（固定の欄以外は undefined） */
+export const chipKind = (label: string): string | undefined => CHIP_KINDS[canonicalLabel(label)]
 
 export const isScan = (link: BookLink) => canonicalLabel(link.label) === SCAN_LABEL
 const presetIndex = (link: BookLink) => LINK_PRESETS.indexOf(canonicalLabel(link.label))

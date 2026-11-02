@@ -60,7 +60,7 @@ export function LinkEditor({ links, onChange }: { links: BookLink[]; onChange: (
       return <div className={`link-editor${dragId === link.id ? ' dragging' : ''}${fixed ? ' fixed' : ''}`} key={link.id} data-link-id={link.id}>
         {fixed ? <span className="drag-handle" aria-hidden="true" /> : <button type="button" className="drag-handle" aria-label={`「${link.label || 'リンク'}」を並べ替え（ドラッグ、または↑↓キー）`} title="ドラッグして並べ替え"
           onPointerDown={startDrag(link.id)} onPointerMove={dragOver} onPointerUp={endDrag} onPointerCancel={endDrag} onKeyDown={keyMove(link.id, index)}><GripVertical /></button>}
-        {fixed ? <input value={link.label} readOnly className="label-fixed" title="この表示名は変更できません" />
+        {fixed ? <input value={link.label} readOnly className={`label-fixed ${chipKind(link.label) ?? ''}`} title="この表示名は変更できません" />
           : <input value={link.label} onChange={e => { if (!LINK_PRESETS.includes(canonicalLabel(e.target.value))) update(link.id, { label: e.target.value }) }} placeholder="表示名" />}
         <span className={`url-field${locked ? ' locked' : ''}`}>
           {locked ? <button type="button" className="url-paste" onClick={() => unlock(link.id)} aria-label="URLを編集" title="URLを編集"><Pencil /></button>

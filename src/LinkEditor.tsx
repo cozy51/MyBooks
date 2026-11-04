@@ -6,11 +6,12 @@ import type { BookLink } from './types'
 const ICONS: Record<string, typeof Link2> = { 'インフォグラフィック': ChartPie, '音声解説': Headphones, '動画解説': Video, '全ページスキャン': ScanLine, 'GeminiNotebookスライド': Presentation, 'GeminiNotebookスライド動画': MonitorPlay }
 function LinkIcon({ label }: { label: string }) { const Icon = ICONS[canonicalLabel(label)] ?? Link2; return <Icon /> }
 
-/** カード用：URLのあるリンクを先頭から最大6つ（固定のリンクは短い名前で表示） */
+/** カード用：URLのあるリンクを先頭から最大6つ（固定のリンクは短い名前で表示）。
+ *  小さなバッジなので、押したときにわずかに動いてもリンクのドラッグにならないよう draggable を切る（1回のクリックで開けるように） */
 export function CardLinks({ links }: { links: BookLink[] }) {
   const shown = presetsFirst(links).filter(l => l.url).slice(0, CARD_LINK_LIMIT)
   if (!shown.length) return null
-  return <div className="link-chips">{shown.map(l => <a key={l.id} href={l.url} target="_blank" rel="noreferrer" className={chipKind(l.label)} title={`${l.label || 'リンク'}\n${l.url}`}
+  return <div className="link-chips">{shown.map(l => <a key={l.id} href={l.url} target="_blank" rel="noreferrer" className={chipKind(l.label)} draggable={false} title={`${l.label || 'リンク'}\n${l.url}`}
     onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}><LinkIcon label={l.label} />{shortLabel(l.label)}</a>)}</div>
 }
 

@@ -329,7 +329,9 @@ function App() {
     }; reader.readAsText(file)
   }
 
-  return <div className="app-shell">
+  // Driveに保存できていない間は、画面全体を暖色にして気づきやすくする
+  const driveWarn = drive.status === 'signedOut' || drive.status === 'needsFolder' || drive.status === 'error'
+  return <div className={`app-shell${driveWarn ? ` drive-warn drive-warn-${drive.status}` : ''}`}>
     <header className="topbar">
       <button className="brand" onClick={() => { setQuery(''); setCategory('all'); setStatus('all') }}><img className="brandmark" src="/favicon.svg" alt="" /><span>MyBooks<small>わたしの本棚</small></span></button>
       <div className="header-actions"><button className={`ghost-btn backup-label sync-${drive.status}`} onClick={() => setBackupOpen(true)} title={syncLabel[drive.status]}><SyncIcon status={drive.status} /><span>{syncLabel[drive.status]}</span></button><button className="primary-btn" onClick={() => openBook(emptyBook())}><Plus /> 本を追加</button><button className="avatar" aria-label="設定" onClick={() => setSettingsOpen(true)}><Settings /></button></div>

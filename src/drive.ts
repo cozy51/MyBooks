@@ -253,6 +253,13 @@ export async function getFile(token: string, id: string): Promise<DriveFile | nu
   return file.trashed || !file.parents?.includes(DATA_FOLDER_ID) ? null : { id: file.id, modifiedTime: file.modifiedTime }
 }
 
+/** Driveのファイルの中身を受け取る（要約音声の再生用）。読めないときは例外 */
+export async function downloadBlob(token: string, id: string): Promise<Blob> {
+  const res = await call(token, `${API}/${id}?alt=media`)
+  if (!res.ok) throw new Error(`Google Driveからファイルを読めませんでした（${res.status}）`)
+  return res.blob()
+}
+
 /** 保存先フォルダ内の保存ファイルを探す（複数ある場合は最初に作られたもの） */
 export async function findFile(token: string): Promise<DriveFile | null> {
   const q = encodeURIComponent(`'${DATA_FOLDER_ID}' in parents and name='${DRIVE_FILE_NAME}' and trashed=false`)

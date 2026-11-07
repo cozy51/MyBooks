@@ -138,3 +138,4 @@
 .app-shell.drive-warn-error{background:linear-gradient(180deg,#ffd6d9 0,#ffecee 320px,#fff4f5 100%);box-shadow:inset 0 0 0 6px #e5606d}
 .app-shell.drive-warn-error .topbar{background:#fff0f1;border-bottom-color:#e5606d}
 .app-shell.drive-warn-error .drive-alert{background:#ffe0e3;border-color:#e5606d}
+.card-audio{flex:0 0 auto;border:0;background:#fbeafd;color:#a21caf;box-shadow:inset 0 0 0 1px #e9a8f2;width:18px;height:18px;padding:0;border-radius:5px;display:grid;place-items:center;transition:.15s}.card-audio svg{width:10px;height:10px}.card-audio.idle svg{fill:currentColor}.card-audio.playing svg{fill:currentColor;width:8px;height:8px}.card-audio:hover,.card-audio:focus-visible,.card-audio.playing{background:#a21caf;color:#fff;box-shadow:none}.card-audio.error{background:#fde4e4;color:#c4323b;box-shadow:inset 0 0 0 1px #f3a3a8}.link-editor input.label-fixed.sumvoice{background:#fbeafd;color:#a21caf;border-color:#e9a8f2}

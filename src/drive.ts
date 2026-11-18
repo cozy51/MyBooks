@@ -80,6 +80,8 @@ function loadScript(src: string) {
   return promise
 }
 const loadGis = () => loadScript('https://accounts.google.com/gsi/client')
+// ログインのポップアップはクリック直後に開かないとブラウザに閉じられる（「キャンセル」扱いになる）ので、先に読み込んでおく
+if (typeof window !== 'undefined' && DRIVE_CLIENT_ID) void loadGis().catch(() => undefined)
 
 function savedToken(key: string): string | null {
   try {
@@ -113,6 +115,8 @@ function saveToken(token: string, expiresIn: number | undefined, scope: string |
 // ブラウザだけで受け取るトークンは1時間で切れるので、サーバーで新しいトークンを発行してもらい、ログインが切れないようにする。
 // サーバーに GOOGLE_CLIENT_SECRET が設定されていなければ（not_configured）、従来どおりブラウザだけでログインする。
 let serverAuth: boolean | undefined
+/** サーバーに保管したログインが無い・切れていると分かっている（このときはクリック直後にログイン画面を開く） */
+let serverSignedOut = false
 let refreshing: Promise<string | null> | null = null
 const tokenListeners = new Set<(token: string) => void>()
 /** トークンを新しく受け取ったときに呼ばれる（自動更新・再接続で Drive の同期をやり直すため） */
@@ -131,6 +135,7 @@ export function refreshToken(): Promise<string | null> {
       const { status, data } = await authApi({ action: 'refresh' })
       if (status === 501 || status === 404 || status === 405) { serverAuth = false; return null }
       serverAuth = true
+      serverSignedOut = status === 401
       if (status !== 200 || !data.access_token) return null
       saveToken(data.access_token, data.expires_in, data.scope)
       return data.access_token
@@ -155,20 +160,26 @@ if (typeof window !== 'undefined' && DRIVE_CLIENT_ID) {
   }, 60_000)
 }
 
+const loginErrorMessage = (type: string) => type === 'popup_closed'
+  ? 'ログイン画面が閉じられました。もう一度「Googleでログインして接続」を押してください（すぐ閉じてしまう場合は、ブラウザのポップアップ許可をご確認ください）'
+  : 'ログイン画面を開けませんでした（ポップアップの許可を確認してください）'
+
 /** ログイン画面（ポップアップ）を出して、サーバーにログインを保管してもらう */
 async function signInWithServer(scope: string): Promise<string> {
-  await loadGis()
+  // 読み込み済みなら await を挟まずに開く（クリックからの時間が空くと、ポップアップがすぐ閉じられてしまう）
+  if (!window.google?.accounts?.oauth2) await loadGis()
   const oauth = window.google?.accounts.oauth2
   if (!oauth) throw new Error('Googleのログイン機能を読み込めませんでした')
   const code = await new Promise<string>((resolve, reject) => {
     oauth.initCodeClient({
       client_id: DRIVE_CLIENT_ID, scope, ux_mode: 'popup', include_granted_scopes: false,
       callback: r => r.code ? resolve(r.code) : reject(new Error('Googleの認証に失敗しました。もう一度ログインしてください。')),
-      error_callback: e => reject(new Error(e.type === 'popup_closed' ? 'ログインがキャンセルされました' : 'ログイン画面を開けませんでした（ポップアップの許可を確認してください）')),
+      error_callback: e => reject(new Error(loginErrorMessage(e.type))),
     }).requestCode()
   })
   const { status, data } = await authApi({ action: 'exchange', code })
   if (status !== 200 || !data.access_token) throw new Error((data as { error?: string }).error || `ログインできませんでした（${status}）`)
+  serverSignedOut = false
   saveToken(data.access_token, data.expires_in, data.scope)
   return data.access_token
 }
@@ -176,7 +187,8 @@ async function signInWithServer(scope: string): Promise<string> {
 const tokenClients = new Map<string, TokenClient>()
 async function requestToken(scope: string, key: string): Promise<string> {
   // サーバーにログインを保管できるなら、そちらを使う（一度ログインすれば、それ以降はログインが切れない）
-  const refreshed = isYouTubeKey(key) ? null : await refreshToken()
+  // ログインが切れていると分かっているときは問い合わせを待たず、クリック直後にログイン画面を開く
+  const refreshed = isYouTubeKey(key) || (serverAuth && serverSignedOut) ? null : await refreshToken()
   const hasScope = () => key === READ_TOKEN_KEY ? storedReadToken() : key === YOUTUBE_TOKEN_KEY ? storedYouTubeToken() : key === YOUTUBE_WRITE_TOKEN_KEY ? storedYouTubeWriteToken() : storedToken()
   if (refreshed && hasScope()) return hasScope()!
   if (serverAuth && !isYouTubeKey(key)) {
@@ -185,7 +197,7 @@ async function requestToken(scope: string, key: string): Promise<string> {
     if (!token) throw new Error(key === YOUTUBE_TOKEN_KEY ? 'YouTubeの読み取り権限が許可されませんでした。同期時に許可してください。' : '必要なGoogleの権限が許可されませんでした')
     return token
   }
-  await loadGis()
+  if (!window.google?.accounts?.oauth2) await loadGis()
   const oauth = window.google?.accounts.oauth2
   if (!oauth) throw new Error('Googleのログイン機能を読み込めませんでした')
   return new Promise((resolve, reject) => {
@@ -199,7 +211,7 @@ async function requestToken(scope: string, key: string): Promise<string> {
       saveToken(r.access_token, r.expires_in, r.scope, key)
       resolve(r.access_token)
     }
-    tokenClient.error_callback = e => reject(new Error(e.type === 'popup_closed' ? 'ログインがキャンセルされました' : 'ログイン画面を開けませんでした（ポップアップの許可を確認してください）'))
+    tokenClient.error_callback = e => reject(new Error(loginErrorMessage(e.type)))
     tokenClient.requestAccessToken({ prompt: '' })
   })
 }
@@ -231,7 +243,7 @@ export function signOut() {
   const token = storedToken()
   clearToken()
   if (token) window.google?.accounts.oauth2.revoke(token)
-  if (serverAuth) void authApi({ action: 'signout' }).catch(() => undefined)
+  if (serverAuth) { serverSignedOut = true; void authApi({ action: 'signout' }).catch(() => undefined) }
 }
 
 async function call(token: string, url: string, init: RequestInit = {}) {

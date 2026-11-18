@@ -3,6 +3,8 @@ import * as drive from './drive'
 import type { Book } from './types'
 
 const META_KEY = 'mybooks-drive-v1'
+/** ページ移動によるログインの結果（起動時に1回だけ読み取る） */
+const redirectResult = drive.takeRedirectResult()
 const SAVE_DELAY = 1500
 
 /** syncedAt: 最後に同期したときのDriveファイルの更新日時 / dirty: Driveに未保存の変更があるか */
@@ -75,6 +77,8 @@ export function useDriveSync<T = Book>(storeKey: string, books: T[], applyRemote
   }, [applyRemote, adapter, saveMeta, enabled])
 
   const connect = useCallback(async () => {
+    // ポップアップは環境によって途中で閉じられて失敗するので、ページごとGoogleへ移動してログインする
+    if (drive.signInWithRedirect()) return
     try { await sync(await drive.signIn()) } catch (e) { setStatus('signedOut'); setMessage(e instanceof Error ? e.message : String(e)) }
   }, [sync])
 
@@ -90,10 +94,11 @@ export function useDriveSync<T = Book>(storeKey: string, books: T[], applyRemote
   useEffect(() => {
     if (!enabled || !drive.DRIVE_CLIENT_ID) return
     let cancelled = false
+    const redirect = redirectResult
     void drive.currentToken().then(token => {
       if (cancelled) return
       if (token) void sync(token)
-      else setStatus('signedOut')
+      else { setStatus('signedOut'); if (redirect?.error) setMessage(redirect.error) }
     })
     return () => { cancelled = true }
   }, [sync, enabled])

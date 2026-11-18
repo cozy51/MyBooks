@@ -6,6 +6,8 @@
 // リクエスト: { action: 'exchange', code } ログイン時に受け取ったコードをトークンに交換する
 //             { action: 'refresh' } Cookie のリフレッシュトークンで新しいアクセストークンを発行する
 //             { action: 'signout' } リフレッシュトークンを無効にして Cookie を消す
+// GET /api/auth?start=1 … ポップアップを使わず、ページごとGoogleのログイン画面へ移動する（戻り先もこのURL）
+//   ※ Google Cloud の OAuth クライアントの「承認済みのリダイレクト URI」に https://<ドメイン>/api/auth の登録が必要
 import { reply } from './_lib.js'
 
 const COOKIE = 'mybooks_session'
@@ -35,6 +37,8 @@ async function unseal(value: string): Promise<string | null> {
 }
 
 const readCookie = (request: Request) => request.headers.get('cookie')?.split(/;\s*/).find(c => c.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1)
+const STATE_COOKIE = 'mybooks_oauth_state'
+const readNamed = (request: Request, name: string) => request.headers.get('cookie')?.split(/;\s*/).find(c => c.startsWith(`${name}=`))?.slice(name.length + 1)
 const cookie = (value: string, maxAge: number) => `${COOKIE}=${value}; Path=/api/auth; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`
 
 interface TokenResult { access_token?: string; expires_in?: number; refresh_token?: string; scope?: string; error?: string }
@@ -46,6 +50,41 @@ async function tokenRequest(params: Record<string, string>): Promise<{ ok: boole
 
 const tokenReply = (data: TokenResult, headers?: Record<string, string>) =>
   Response.json({ access_token: data.access_token, expires_in: data.expires_in ?? 3600, scope: data.scope ?? '' }, { status: 200, headers: { 'Cache-Control': 'no-store', ...headers } })
+
+const SCOPE = 'https://www.googleapis.com/auth/drive.file'
+const callbackUrl = (request: Request) => {
+  const url = new URL(request.url)
+  const host = request.headers.get('x-forwarded-host') || url.host
+  const proto = request.headers.get('x-forwarded-proto') || url.protocol.replace(':', '')
+  return `${proto}://${host}/api/auth`
+}
+const backToApp = (request: Request, query: string, cookies: string[]) => {
+  const headers = new Headers({ Location: `${new URL(callbackUrl(request)).origin}/?${query}`, 'Cache-Control': 'no-store' })
+  for (const c of cookies) headers.append('Set-Cookie', c)
+  return new Response(null, { status: 302, headers })
+}
+const clearState = `${STATE_COOKIE}=; Path=/api/auth; HttpOnly; Secure; SameSite=Lax; Max-Age=0`
+
+/** ページ移動によるログイン（ポップアップが閉じられてしまう環境でも使える） */
+export async function GET(request: Request): Promise<Response> {
+  const url = new URL(request.url)
+  if (!clientId() || !clientSecret()) return backToApp(request, `drive_error=${encodeURIComponent('サーバーにGOOGLE_CLIENT_SECRETが設定されていません')}`, [])
+  if (url.searchParams.has('start')) {
+    const state = base64url(crypto.getRandomValues(new Uint8Array(24)))
+    const google = new URL('https://accounts.google.com/o/oauth2/v2/auth')
+    google.search = new URLSearchParams({ client_id: clientId(), redirect_uri: callbackUrl(request), response_type: 'code', scope: SCOPE, access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true', state }).toString()
+    return new Response(null, { status: 302, headers: { Location: google.toString(), 'Cache-Control': 'no-store', 'Set-Cookie': `${STATE_COOKIE}=${state}; Path=/api/auth; HttpOnly; Secure; SameSite=Lax; Max-Age=600` } })
+  }
+  const fail = (message: string) => backToApp(request, `drive_error=${encodeURIComponent(message)}`, [clearState])
+  const error = url.searchParams.get('error')
+  if (error) return fail(error === 'access_denied' ? 'ログインがキャンセルされました' : `Googleのログインに失敗しました（${error}）`)
+  const code = url.searchParams.get('code')
+  const state = url.searchParams.get('state')
+  if (!code || !state || state !== readNamed(request, STATE_COOKIE)) return fail('ログインの確認に失敗しました。もう一度お試しください')
+  const { ok, data } = await tokenRequest({ code, grant_type: 'authorization_code', redirect_uri: callbackUrl(request) })
+  if (!ok || !data.access_token || !data.refresh_token) return fail(`Googleのログインに失敗しました（${data.error ?? 'no_refresh_token'}）`)
+  return backToApp(request, 'drive=connected', [clearState, cookie(await seal(data.refresh_token), MAX_AGE)])
+}
 
 export async function POST(request: Request): Promise<Response> {
   if (!clientId() || !clientSecret()) return reply(501, { error: 'GOOGLE_CLIENT_SECRET が未設定のため、ログインを保つ仕組みは使えません。', code: 'not_configured' })

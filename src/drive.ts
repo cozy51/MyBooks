@@ -216,6 +216,28 @@ async function requestToken(scope: string, key: string): Promise<string> {
   })
 }
 
+/**
+ * ページごとGoogleのログイン画面へ移動してログインする（ポップアップを使わない）。
+ * サーバーにログインを保管できないとき（GOOGLE_CLIENT_SECRET 未設定）は false を返すので、従来のポップアップを使う。
+ */
+export function signInWithRedirect(): boolean {
+  if (!DRIVE_CLIENT_ID || serverAuth !== true) return false
+  window.location.assign('/api/auth?start=1')
+  return true
+}
+
+/** ページ移動によるログインから戻ってきたときの結果（URLから取り除いて返す） */
+export function takeRedirectResult(): { connected: boolean; error?: string } | null {
+  if (typeof window === 'undefined') return null
+  const url = new URL(window.location.href)
+  const connected = url.searchParams.get('drive') === 'connected'
+  const error = url.searchParams.get('drive_error') ?? undefined
+  if (!connected && !error) return null
+  url.searchParams.delete('drive'); url.searchParams.delete('drive_error')
+  window.history.replaceState(null, '', url.pathname + url.search + url.hash)
+  return { connected, error }
+}
+
 /** Googleアカウントでログインしてアクセストークンを取得する（ボタン操作から呼ぶこと） */
 export const signIn = () => requestToken(SCOPE, TOKEN_KEY)
 /** Driveのファイルを読み取れるトークンを取得する（初回だけGoogleの許可画面が出て、2回目以降は自動）。ボタン操作から呼ぶこと */
